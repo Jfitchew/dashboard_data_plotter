@@ -709,6 +709,10 @@ class DashboardDataPlotter(tk.Tk):
             messagebox.showinfo("Missing selection", "Select an angle column (required for Radar plot).")
             return
 
+        if getattr(self.ax, "name", "") != "polar":
+            self.fig.clf()
+            self.ax = self.fig.add_subplot(111, projection="polar")
+
         self.ax.clear()
         self.ax.set_theta_zero_location("N")
         self.ax.set_theta_direction(-1)

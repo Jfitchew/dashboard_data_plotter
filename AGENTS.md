@@ -1,99 +1,121 @@
 # AGENTS.md — Dashboard Data Plotter
 
-This file defines **strict rules** for AI agents (OpenAI Codex) modifying this repository.
-
-The goal is to allow safe iteration without breaking UI wiring, dataset semantics,
-or plotting correctness.
+This file defines **hard rules and invariants** for AI coding agents (OpenAI Codex).
+Violating these rules is considered a breaking change.
 
 ---
 
-## 🧠 High-level intent
+## 🎯 Project intent
 
-Dashboard Data Plotter is a **stateful Tkinter application** with tight coupling between:
-- UI widgets
-- Dataset order
-- Plot logic
-- Comparison semantics
+This is a **stateful Tkinter desktop application** with complex interactions between:
+- UI state
+- Dataset identity
+- Dataset ordering
+- Plot semantics
+- Comparison logic
 
-Small changes in one area can silently break others.
+Small changes can silently break correctness.
 
-Agents must respect the invariants below.
+Agents must follow the rules below.
 
 ---
 
-## 🚨 Non-negotiable invariants
+## 🔐 Core invariants (DO NOT BREAK)
 
-### Dataset identity & order
-- Dataset order is defined by the **Treeview order** in the Data Sources panel
-- Plotting order MUST follow the Treeview order
-- Save All must preserve this order
-- Renaming a dataset must not change its identity or break references
+### Dataset handling
+- Dataset identity is tracked via `source_id`
+- Display names may change, identities must not
+- Dataset plotting order **must exactly match**
+  the Data Sources Treeview order
+- Save All must preserve dataset order and names
 
-### Plot semantics
-- Radar plots:
-  - Depend on crank angle
-  - Use 52-bin angular aggregation
-  - Support absolute and comparison modes
-- Bar plots:
-  - Represent **mean metric per dataset**
-  - Must ignore crank angle
-  - Must NOT allow “% of dataset mean”
-  - Must support baseline comparison with zero line
+### Plot types
 
-### UI logic
-- When Bar plot is selected:
-  - Angle column selection must be disabled
-  - Close-loop option must be disabled
-  - “% of dataset mean” must be disabled and auto-reset to Absolute
-- When Radar plot is selected:
-  - All angle-related controls must be re-enabled
+#### Radar plots
+- Depend on crank angle
+- Use standard crank angle internally
+- Use 52‑bin angular aggregation
+- Support:
+  - absolute values
+  - % of dataset mean
+  - comparison vs baseline
 
-### Data handling
-- All numeric parsing must use:
+#### Bar plots
+- Represent **mean metric per dataset**
+- Must **ignore crank angle entirely**
+- Must **not allow % of dataset mean**
+- Must support baseline comparison
+- Baseline bar must be present at zero
+
+### UI state rules
+- Selecting Bar plot:
+  - disables angle selection
+  - disables close‑loop
+  - disables %-mean mode
+- Switching back to Radar restores controls
+- UI must never enter an invalid state
+
+### Data cleaning
+- Numeric parsing must use:
   ```python
   pd.to_numeric(..., errors="coerce")
   ```
 - Sentinel values must be converted to NaN
-- Missing data must never raise during plotting
+- Missing values must never raise during plotting
 
 ---
 
-## ❌ What agents must NOT do
+## 🚫 Agents must NOT
 
-- Do NOT reorder datasets alphabetically unless explicitly instructed
-- Do NOT refactor UI layout without user request
-- Do NOT change plotting definitions silently (e.g. mean definition)
-- Do NOT introduce new dependencies without asking
-- Do NOT convert this app to a web framework
-
----
-
-## ✅ What agents SHOULD do
-
-- Make minimal, localised changes
-- Preserve existing function signatures where possible
-- Add UI state guards instead of deleting options
-- Add helper functions instead of duplicating logic
-- Prefer explicitness over clever abstractions
+- Reorder datasets alphabetically unless explicitly requested
+- Change plot semantics silently
+- Merge bar and radar logic
+- Refactor UI layout without instruction
+- Introduce new dependencies without approval
+- Convert this app to a web framework
 
 ---
 
-## 🧪 Testing expectations
+## ✅ Agents SHOULD
 
-After any change, the following must still work:
-1. Load multi-dataset JSON
-2. Rename datasets
-3. Toggle Show flags
-4. Switch Radar ↔ Bar plot
-5. Enable/disable comparison mode
-6. Save All and reload the saved file
-7. Package with PyInstaller without runtime errors
+- Make minimal, localised edits
+- Preserve function signatures
+- Add helpers instead of duplicating logic
+- Update README if behaviour changes
+- Run through the testing checklist mentally
 
 ---
 
-## 🧩 If unsure
+## 🧪 Mandatory mental test checklist
 
-If a requested change conflicts with any rule above:
-- STOP
-- Explain the conflict
-- Ask for clarification before coding
+After any change, ensure the following still work:
+
+1. Load single JSON dataset
+2. Load multi‑dataset JSON
+3. Paste multi‑dataset JSON
+4. Rename datasets
+5. Toggle Show / Hide
+6. Switch Radar ↔ Bar
+7. Enable comparison mode
+8. Change baseline
+9. Save All and reload saved file
+10. Build EXE with PyInstaller
+
+If unsure, STOP and ask the user.
+
+---
+
+## 🧭 Guidance for Codex prompts
+
+Good task:
+> “Add feature X without breaking dataset ordering or comparison semantics. Follow AGENTS.md.”
+
+Bad task:
+> “Refactor everything to be cleaner.”
+
+---
+
+## Final rule
+
+If a requested change conflicts with ANY rule above:
+**STOP and ask for clarification before coding.**

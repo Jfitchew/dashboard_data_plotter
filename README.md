@@ -1,32 +1,38 @@
 # Dashboard Data Plotter
 
-Dashboard Data Plotter is a local Python (Tkinter) application for analysing cycling pedal-stroke
-metrics across multiple test runs.
+Dashboard Data Plotter is a **local, offline Python desktop application** built with **Tkinter + Matplotlib**
+for analysing cycling, biomechanical, and other structured numerical datasets.
 
-It supports:
-- Loading one or more JSON datasets (single or multi-dataset JSON files)
-- Visual comparison of pedal-stroke metrics across datasets
-- Radar (polar) plots across the pedal stroke
-- Bar plots summarising per-dataset averages
-- Baseline comparison modes
-- Consistent dataset ordering, naming, and saving
+Although originally focused on pedal‑stroke analysis, the application has evolved into a
+**general dashboard‑style data comparison tool**, supporting both angular (radar) and aggregate (bar)
+visualisations across multiple datasets.
 
-The tool is designed for biomechanical and performance analysis use cases
-(e.g. pedal force, power, dead-centre metrics).
+The project is intentionally designed to be **Codex‑friendly**: modular, explicit, rule‑driven,
+and resistant to accidental semantic breakage.
 
 ---
 
-## Data format
+## Core capabilities
 
-### Single dataset JSON
+### Data loading
+- Load **one or more JSON files** from disk
+- Load **multi‑dataset JSON objects** (file‑based or pasted)
+- Paste JSON objects directly into the UI
+- Save all currently loaded datasets into a **single multi‑dataset JSON**
+- Rename datasets without changing their identity
+- Toggle dataset visibility (Show / Hide)
+
+### Supported JSON formats
+
+#### Single dataset (list of records)
 ```json
 [
   { "leftPedalCrankAngle": 90, "leftPedalPower": 210 },
-  ...
+  { "leftPedalCrankAngle": 180, "leftPedalPower": 320 }
 ]
 ```
 
-### Multi-dataset JSON
+#### Multi‑dataset object
 ```json
 {
   "R1": { "rideData": [ {...}, {...} ] },
@@ -34,45 +40,123 @@ The tool is designed for biomechanical and performance analysis use cases
 }
 ```
 
-Each dataset is expected to represent approximately **52 angular bins**
-covering the full 360° pedal stroke.
-
-Sentinel values such as `-999` or `-99` are treated as missing data.
+Each dataset typically represents **~52 angular bins** over a full 360° cycle,
+but the app is tolerant of missing or sparse data.
 
 ---
 
-## Application structure
+## Visualisation modes
 
-- **Tkinter UI**
-  - Left panel: Data Sources and Plot Settings
-  - Right panel: Matplotlib figure canvas
-- **Dataset handling**
-  - Multiple datasets loaded simultaneously
-  - Order in the Data Sources panel defines plotting order
-- **Plot types**
-  - Radar (polar): metric vs crank angle
-  - Bar: mean metric per dataset
-- **Comparison mode**
-  - Optional baseline dataset
-  - Radar: differences plotted around a zero ring
-  - Bar: differences plotted around zero
+### Radar (polar) plot
+- Metric value vs crank angle
+- Uses **standard crank angle convention**
+  - 0° = Top Dead Centre (TDC)
+  - Clockwise positive
+- Automatically converts Body Rocket crank‑angle conventions
+- Supports:
+  - Absolute metric values
+  - % of dataset mean
+  - Comparison vs baseline (difference ring)
 
----
-
-## Key invariants (do not break)
-
-- Dataset plotting order must match the order shown in the Data Sources panel
-- Bar plots must NOT depend on crank angle selection
-- “% of dataset mean” is invalid for bar plots
-- All plots must work with multiple datasets enabled/disabled via “Show”
-- Save All must reproduce a valid multi-dataset JSON file
+### Bar plot
+- One bar per dataset
+- Represents **mean metric value per dataset**
+- Supports:
+  - Absolute values
+  - Difference vs baseline
+- Explicitly **does not use crank angle**
+- “% of dataset mean” is intentionally disabled for bar plots
 
 ---
 
-## Running
+## Comparison mode
 
-```bash
-python dashboard_data_plotter.py
+When comparison mode is enabled:
+- A **baseline dataset** is selected
+- Radar plots:
+  - Baseline drawn as a **zero reference ring**
+  - Other datasets plotted as angular differences
+- Bar plots:
+  - Baseline bar fixed at **0**
+  - Other bars show ± difference relative to baseline
+
+---
+
+## UI structure
+
+- **Left panel**
+  - Data Sources list (order matters)
+  - Paste JSON pane
+  - Plot settings
+  - Comparison controls
+- **Right panel**
+  - Matplotlib figure canvas
+  - Toolbar (zoom, pan, save image)
+
+Dataset order in the **Data Sources panel defines plotting order everywhere**.
+
+---
+
+## Project layout
+
+```
+dashboard_data_plotter/
+  main.py
+  README.md
+  AGENTS.md
+  requirements.txt
+
+  scripts/
+    run_dev.bat
+    build_exe.bat
+
+  src/dashboard_data_plotter/
+    app.py
+    ui/
+      app.py
+    data/
+      loaders.py
+    plotting/
+      helpers.py
+    utils/
+      log.py
+      sortkeys.py
 ```
 
-No external services are required.
+---
+
+## Running locally
+
+```bat
+scripts\run_dev.bat
+```
+
+This will:
+1. Create a virtual environment
+2. Install dependencies
+3. Run the application
+
+---
+
+## Building a Windows executable
+
+```bat
+scripts\build_exe.bat
+```
+
+Produces:
+```
+dist\DashboardDataPlotter.exe
+```
+
+---
+
+## Design philosophy
+
+- Explicit > clever
+- UI logic and data logic are separated
+- Dataset order is sacred
+- Comparison semantics must be visually obvious
+- Errors should never crash the app
+
+All of these rules are enforced in **AGENTS.md**.

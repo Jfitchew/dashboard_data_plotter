@@ -433,6 +433,17 @@ class DashboardDataPlotter(tk.Tk):
         if not self.baseline_display_var.get():
             self.baseline_display_var.set(display)
 
+    def _unique_paste_source_id(self, display: str) -> str:
+        base = f"PASTE::{display}"
+        if base not in self.loaded:
+            return base
+        i = 2
+        candidate = f"{base} ({i})"
+        while candidate in self.loaded:
+            i += 1
+            candidate = f"{base} ({i})"
+        return candidate
+
     # ---------------- File load / paste ----------------
     def add_files(self):
         paths = filedialog.askopenfilenames(
@@ -506,7 +517,7 @@ class DashboardDataPlotter(tk.Tk):
                 continue
             display = make_unique_name(
                 str(name), set(self.display_to_id.keys()))
-            source_id = f"PASTE::{display}"
+            source_id = self._unique_paste_source_id(display)
             try:
                 df = pd.DataFrame(records)
                 for c in df.columns:

@@ -1,7 +1,8 @@
 # Dashboard Data Plotter
 
 Dashboard Data Plotter is a **local, offline Python desktop application** built with **Tkinter + Matplotlib**
-for analysing cycling, biomechanical, and other structured numerical datasets.
+for analysing cycling, biomechanical, and other structured numerical datasets, with optional **Plotly**
+interactive plotting in the system browser.
 
 Although originally focused on pedal‑stroke analysis, the application has evolved into a
 **general dashboard‑style data comparison tool**, supporting both angular (radar) and aggregate (bar)
@@ -92,6 +93,9 @@ When comparison mode is enabled:
 - **Right panel**
   - Matplotlib figure canvas
   - Toolbar (zoom, pan, save image)
+
+When the **Use Plotly (interactive)** option is enabled, plots are rendered as interactive Plotly charts
+in your default web browser instead of the embedded Matplotlib canvas.
 
 Dataset order in the **Data Sources panel defines plotting order everywhere**.
 

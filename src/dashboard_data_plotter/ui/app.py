@@ -182,14 +182,14 @@ class DashboardDataPlotter(tk.Tk):
         # Plot type (radar vs bar)
         ttk.Label(angle_frame, text="Plot type:").grid(
             row=0, column=0, sticky="w")
-        # pt = ttk.Frame(angle_frame)
-        # pt.grid(row=0, column=1, sticky="w", padx=(8, 0))
-        ttk.Radiobutton(angle_frame, text="Radar (polar)", variable=self.plot_type_var, value="radar",
-                        command=self._on_plot_type_change).grid(row=0, column=1, sticky="w")
-        ttk.Radiobutton(angle_frame, text="Bar (avg)", variable=self.plot_type_var, value="bar",
-                        command=self._on_plot_type_change).grid(row=0, column=1, sticky="e")
-        ttk.Checkbutton(angle_frame, text="Use Plotly (interactive)",
-                        variable=self.use_plotly_var).grid(row=2, column=0, columnspan=2, sticky="w")
+        pt = ttk.Frame(angle_frame)
+        pt.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Radiobutton(pt, text="Radar (polar)", variable=self.plot_type_var, value="radar",
+                        command=self._on_plot_type_change).grid(row=0, column=0, sticky="w")
+        ttk.Radiobutton(pt, text="Bar (avg)", variable=self.plot_type_var, value="bar",
+                        command=self._on_plot_type_change).grid(row=1, column=0, sticky="w")
+        ttk.Checkbutton(angle_frame, text="Interactive (Plotly)",
+                        variable=self.use_plotly_var).grid(row=0, column=2, sticky="w")
         ttk.Label(angle_frame, text="Angle column:").grid(
             row=1, column=0, sticky="w")
         self.angle_combo = ttk.Combobox(
@@ -201,6 +201,9 @@ class DashboardDataPlotter(tk.Tk):
         )
         self.angle_combo.grid(row=1, column=1, sticky="w", padx=(8, 0))
 
+        self.close_loop_chk = ttk.Checkbutton(
+            angle_frame, text="Close loop", variable=self.close_loop_var).grid(row=1, column=2, sticky="w")
+
         metric_frame = ttk.Frame(left)
         metric_frame.grid(row=9, column=0, sticky="ew", pady=(6, 2))
         ttk.Label(metric_frame, text="Metric column:").grid(
@@ -208,10 +211,6 @@ class DashboardDataPlotter(tk.Tk):
         self.metric_combo = ttk.Combobox(
             metric_frame, textvariable=self.metric_var, values=[], state="readonly", width=30)
         self.metric_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
-
-        self.close_loop_chk = ttk.Checkbutton(
-            left, text="Close loop (connect 360°)", variable=self.close_loop_var)
-        self.close_loop_chk.grid(row=10, column=0, sticky="w", pady=(6, 2))
 
         sentinel_frame = ttk.Frame(left)
         sentinel_frame.grid(row=11, column=0, sticky="ew", pady=(6, 2))
@@ -232,7 +231,7 @@ class DashboardDataPlotter(tk.Tk):
                         value="absolute").grid(row=0, column=0, sticky="w")
         self.rb_percent_mean = ttk.Radiobutton(
             vm_frame, text="% of dataset mean", variable=self.value_mode_var, value="percent_mean")
-        self.rb_percent_mean.grid(row=1, column=0, sticky="w")
+        self.rb_percent_mean.grid(row=0, column=1, sticky="w", padx=(20, 0))
 
         ttk.Separator(left).grid(row=15, column=0, sticky="ew", pady=10)
 
@@ -240,19 +239,23 @@ class DashboardDataPlotter(tk.Tk):
         ttk.Label(left, text="Comparison mode", font=(
             "Segoe UI", 11, "bold")).grid(row=16, column=0, sticky="w")
 
-        ttk.Checkbutton(left, text="Plot as difference vs baseline", variable=self.compare_var,
+        ttk.Checkbutton(left, text="Plot as difference vs Baseline:", variable=self.compare_var,
                         command=self._on_compare_toggle).grid(row=17, column=0, sticky="w", pady=(6, 2))
 
         base_frame = ttk.Frame(left)
-        base_frame.grid(row=18, column=0, sticky="ew", pady=(6, 2))
-        ttk.Label(base_frame, text="Baseline:").grid(
-            row=0, column=0, sticky="w")
+        base_frame.grid(row=17, column=0, sticky="e", padx=(0, 50))
         self.baseline_combo = ttk.Combobox(base_frame, textvariable=self.baseline_display_var,
                                            values=[], state="readonly", width=30)
         self.baseline_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
-        ttk.Button(left, text="Plot / Refresh", command=self.plot).grid(row=19,
-                                                                        column=0, sticky="ew", pady=(10, 0))
+        ttk.Separator(left).grid(row=18, column=0, sticky="ew", pady=10)
+
+        plot_btn = ttk.Button(left, text="Plot / Refresh", command=self.plot)
+        plot_btn.grid(row=19, column=0, sticky="ew", pady=(10, 0))
+        plot_btn.configure(style="Red.TButton")
+
+        style = ttk.Style()
+        style.configure("Red.TButton", background="red", foreground="black")
 
         self.status = tk.StringVar(
             value="Load one or more JSON files, or paste a dataset object, to begin.")
@@ -700,9 +703,11 @@ class DashboardDataPlotter(tk.Tk):
     def _open_plotly_figure(self, fig: go.Figure, title: str):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as handle:
             out_path = handle.name
-        pio.write_html(fig, file=out_path, auto_open=False, include_plotlyjs="cdn")
+        pio.write_html(fig, file=out_path, auto_open=False,
+                       include_plotlyjs="cdn")
         webbrowser.open(f"file://{out_path}")
-        self.status.set(f"{title} (interactive Plotly plot opened in browser).")
+        self.status.set(
+            f"{title} (interactive Plotly plot opened in browser).")
 
     def _plot_plotly_bar(self, angle_col, metric_col, sentinels, value_mode,
                          compare, baseline_id, baseline_display):
@@ -879,7 +884,8 @@ class DashboardDataPlotter(tk.Tk):
                 title=f"{metric_col} ({mode_str}) difference to Baseline ({b_label})",
                 polar=dict(
                     angularaxis=dict(direction="clockwise", rotation=90),
-                    radialaxis=dict(tickvals=tick_positions, ticktext=tick_text),
+                    radialaxis=dict(tickvals=tick_positions,
+                                    ticktext=tick_text),
                 ),
                 showlegend=True,
             )

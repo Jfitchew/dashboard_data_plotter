@@ -70,9 +70,7 @@ Agents must follow the rules below.
 - Reorder datasets alphabetically unless explicitly requested
 - Change plot semantics silently
 - Merge bar and radar logic
-- Refactor UI layout without instruction
-- Introduce new dependencies without approval
-- Convert this app to a web framework
+
 
 ---
 

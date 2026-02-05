@@ -279,11 +279,14 @@ class DashboardDataPlotter(tk.Tk):
         plot_btn.grid(row=0, column=0, sticky="ew")
         plot_btn.configure(style="Red.TButton")
         self.prev_btn = ttk.Button(
-            plot_btns, text="Prev", command=self._plot_prev, state="disabled")
-        self.prev_btn.grid(row=0, column=1, padx=(6, 0))
+            plot_btns, text="Prev", command=self._plot_prev, state="disabled", width=5)
+        self.prev_btn.grid(row=0, column=1, padx=(10, 0))
+        self.delete_btn = ttk.Button(
+            plot_btns, text="X", command=self._delete_history_entry, state="disabled", width=3)
+        self.delete_btn.grid(row=0, column=2, padx=(2, 0))
         self.next_btn = ttk.Button(
-            plot_btns, text="Next", command=self._plot_next, state="disabled")
-        self.next_btn.grid(row=0, column=2, padx=(6, 0))
+            plot_btns, text="Next", command=self._plot_next, state="disabled", width=5)
+        self.next_btn.grid(row=0, column=3, padx=(2, 0))
 
         style = ttk.Style()
         style.configure("Red.TButton", background="red", foreground="black")
@@ -422,7 +425,6 @@ class DashboardDataPlotter(tk.Tk):
             "sentinels": self.sentinels_var.get(),
             "value_mode": self.value_mode_var.get(),
             "plot_type": self.plot_type_var.get(),
-            "use_plotly": bool(self.use_plotly_var.get()),
             "compare": bool(self.compare_var.get()),
             "baseline_display": self.baseline_display_var.get(),
             "range_low": self.range_low_var.get(),
@@ -432,23 +434,32 @@ class DashboardDataPlotter(tk.Tk):
         }
 
     def _update_history_buttons(self):
-        if not hasattr(self, "prev_btn") or not hasattr(self, "next_btn"):
+        if not hasattr(self, "prev_btn") or not hasattr(self, "next_btn") or not hasattr(self, "delete_btn"):
             return
+        has_current = 0 <= self._history_index < len(self._history)
         self.prev_btn.configure(
             state="normal" if self._history_index > 0 else "disabled")
         self.next_btn.configure(
             state="normal" if 0 <= self._history_index < len(
                 self._history) - 1 else "disabled"
         )
+        self.delete_btn.configure(
+            state="normal" if has_current else "disabled")
 
     def _push_history(self):
         if self._restoring_history:
             return
         snapshot = self._snapshot_settings()
-        if self._history_index < len(self._history) - 1:
-            self._history = self._history[: self._history_index + 1]
-        self._history.append(snapshot)
-        self._history_index = len(self._history) - 1
+        if self.use_plotly_var.get() and 0 <= self._history_index < len(self._history):
+            if snapshot == self._history[self._history_index]:
+                return
+        if 0 <= self._history_index < len(self._history) - 1:
+            insert_at = self._history_index + 1
+            self._history.insert(insert_at, snapshot)
+            self._history_index = insert_at
+        else:
+            self._history.append(snapshot)
+            self._history_index = len(self._history) - 1
         self._update_history_buttons()
 
     def _apply_snapshot(self, snap):
@@ -471,8 +482,7 @@ class DashboardDataPlotter(tk.Tk):
         self.value_mode_var.set(
             snap.get("value_mode", self.value_mode_var.get()))
         self.plot_type_var.set(snap.get("plot_type", self.plot_type_var.get()))
-        self.use_plotly_var.set(
-            bool(snap.get("use_plotly", self.use_plotly_var.get())))
+        self.use_plotly_var.set(False)
         self.compare_var.set(bool(snap.get("compare", self.compare_var.get())))
         self.baseline_display_var.set(
             snap.get("baseline_display", self.baseline_display_var.get()))
@@ -525,6 +535,20 @@ class DashboardDataPlotter(tk.Tk):
             self.plot()
         finally:
             self._restoring_history = False
+
+    def _delete_history_entry(self):
+        if not (0 <= self._history_index < len(self._history)):
+            return
+        confirm = messagebox.askyesno(
+            "Delete history entry",
+            "Delete the current plot settings from history?",
+        )
+        if not confirm:
+            return
+        self._history.pop(self._history_index)
+        if self._history_index >= len(self._history):
+            self._history_index = len(self._history) - 1
+        self._update_history_buttons()
 
     # ---------------- Tree / list actions ----------------
     def _on_tree_click(self, event):

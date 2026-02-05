@@ -74,6 +74,11 @@ class DashboardDataPlotter(tk.Tk):
         self.compare_var = tk.BooleanVar(value=False)
         self.baseline_display_var = tk.StringVar(value="")
 
+        # Plot history
+        self._history = []
+        self._history_index = -1
+        self._restoring_history = False
+
         self._build_ui()
         self._build_plot()
 
@@ -266,9 +271,19 @@ class DashboardDataPlotter(tk.Tk):
 
         ttk.Separator(left).grid(row=18, column=0, sticky="ew", pady=10)
 
-        plot_btn = ttk.Button(left, text="Plot / Refresh", command=self.plot)
-        plot_btn.grid(row=19, column=0, sticky="ew", pady=(10, 0))
+        plot_btns = ttk.Frame(left)
+        plot_btns.grid(row=19, column=0, sticky="ew", pady=(10, 0))
+        plot_btns.columnconfigure(0, weight=1)
+        plot_btn = ttk.Button(
+            plot_btns, text="Plot / Refresh", command=self.plot)
+        plot_btn.grid(row=0, column=0, sticky="ew")
         plot_btn.configure(style="Red.TButton")
+        self.prev_btn = ttk.Button(
+            plot_btns, text="Prev", command=self._plot_prev, state="disabled")
+        self.prev_btn.grid(row=0, column=1, padx=(6, 0))
+        self.next_btn = ttk.Button(
+            plot_btns, text="Next", command=self._plot_next, state="disabled")
+        self.next_btn.grid(row=0, column=2, padx=(6, 0))
 
         style = ttk.Style()
         style.configure("Red.TButton", background="red", foreground="black")
@@ -398,8 +413,118 @@ class DashboardDataPlotter(tk.Tk):
 
     def _on_compare_toggle(self):
         self._set_compare_controls_state()
-        if not self.use_plotly_var.get() and self._can_autoplot():
+
+    def _snapshot_settings(self):
+        return {
+            "angle": self.angle_var.get(),
+            "metric": self.metric_var.get(),
+            "close_loop": bool(self.close_loop_var.get()),
+            "sentinels": self.sentinels_var.get(),
+            "value_mode": self.value_mode_var.get(),
+            "plot_type": self.plot_type_var.get(),
+            "use_plotly": bool(self.use_plotly_var.get()),
+            "compare": bool(self.compare_var.get()),
+            "baseline_display": self.baseline_display_var.get(),
+            "range_low": self.range_low_var.get(),
+            "range_high": self.range_high_var.get(),
+            "range_fixed": bool(self.range_fixed_var.get()),
+            "show_flag": dict(self.show_flag),
+        }
+
+    def _update_history_buttons(self):
+        if not hasattr(self, "prev_btn") or not hasattr(self, "next_btn"):
+            return
+        self.prev_btn.configure(
+            state="normal" if self._history_index > 0 else "disabled")
+        self.next_btn.configure(
+            state="normal" if 0 <= self._history_index < len(
+                self._history) - 1 else "disabled"
+        )
+
+    def _push_history(self):
+        if self._restoring_history:
+            return
+        snapshot = self._snapshot_settings()
+        if self._history_index < len(self._history) - 1:
+            self._history = self._history[: self._history_index + 1]
+        self._history.append(snapshot)
+        self._history_index = len(self._history) - 1
+        self._update_history_buttons()
+
+    def _apply_snapshot(self, snap):
+        missing = []
+        for sid, flag in snap.get("show_flag", {}).items():
+            if sid in self.loaded:
+                self.show_flag[sid] = bool(flag)
+                if self.files_tree.exists(sid):
+                    name = self.files_tree.item(sid, "values")[1]
+                    show_txt = "✓" if self.show_flag.get(sid, True) else ""
+                    self.files_tree.item(sid, values=(show_txt, name))
+            else:
+                missing.append(sid)
+
+        self.angle_var.set(snap.get("angle", self.angle_var.get()))
+        self.metric_var.set(snap.get("metric", self.metric_var.get()))
+        self.close_loop_var.set(
+            bool(snap.get("close_loop", self.close_loop_var.get())))
+        self.sentinels_var.set(snap.get("sentinels", self.sentinels_var.get()))
+        self.value_mode_var.set(
+            snap.get("value_mode", self.value_mode_var.get()))
+        self.plot_type_var.set(snap.get("plot_type", self.plot_type_var.get()))
+        self.use_plotly_var.set(
+            bool(snap.get("use_plotly", self.use_plotly_var.get())))
+        self.compare_var.set(bool(snap.get("compare", self.compare_var.get())))
+        self.baseline_display_var.set(
+            snap.get("baseline_display", self.baseline_display_var.get()))
+        self.range_low_var.set(snap.get("range_low", self.range_low_var.get()))
+        self.range_high_var.set(
+            snap.get("range_high", self.range_high_var.get()))
+        self.range_fixed_var.set(
+            bool(snap.get("range_fixed", self.range_fixed_var.get())))
+
+        self._on_plot_type_change()
+        self._set_compare_controls_state()
+        self.refresh_baseline_choices()
+
+        if self.compare_var.get():
+            baseline_display = self.baseline_display_var.get().strip()
+            baseline_id = self.display_to_id.get(baseline_display, "")
+            if not baseline_id or baseline_id not in self.loaded:
+                self.compare_var.set(False)
+                self._set_compare_controls_state()
+
+        if missing:
+            messagebox.showwarning(
+                "Missing datasets",
+                "Some datasets from this history entry are not loaded:\n\n"
+                + "\n".join(missing),
+            )
+
+    def _plot_prev(self):
+        if self._history_index <= 0:
+            return
+        self._history_index -= 1
+        snap = self._history[self._history_index]
+        self._update_history_buttons()
+        self._restoring_history = True
+        try:
+            self._apply_snapshot(snap)
             self.plot()
+        finally:
+            self._restoring_history = False
+
+    def _plot_next(self):
+        if self._history_index >= len(self._history) - 1:
+            return
+        self._history_index += 1
+        snap = self._history[self._history_index]
+        self._update_history_buttons()
+        self._restoring_history = True
+        try:
+            self._apply_snapshot(snap)
+            self.plot()
+        finally:
+            self._restoring_history = False
 
     # ---------------- Tree / list actions ----------------
     def _on_tree_click(self, event):
@@ -1039,6 +1164,7 @@ class DashboardDataPlotter(tk.Tk):
                 self._plot_plotly_bar(
                     angle_col, metric_col, sentinels, value_mode,
                     compare, baseline_id, baseline_display, fixed_range)
+                self._push_history()
                 return
             if not angle_col:
                 messagebox.showinfo(
@@ -1047,6 +1173,7 @@ class DashboardDataPlotter(tk.Tk):
             self._plot_plotly_radar(
                 angle_col, metric_col, sentinels, value_mode, close_loop,
                 compare, baseline_id, baseline_display, fixed_range)
+            self._push_history()
             return
 
         # ---- BAR PLOT ----
@@ -1089,10 +1216,6 @@ class DashboardDataPlotter(tk.Tk):
                 self._redraw_empty()
                 return
 
-            range_minmax = self._minmax_from_values(heights)
-            if range_minmax:
-                self._update_range_entries(*range_minmax)
-
             x = np.arange(len(labels))
             self.ax.axhline(
                 0.0, color="red" if compare else "black", linewidth=1.2)
@@ -1115,6 +1238,8 @@ class DashboardDataPlotter(tk.Tk):
                 self.ax.set_ylim(fixed_range[0], fixed_range[1])
 
             self.ax.grid(True, axis="y", linestyle=":")
+            low, high = self.ax.get_ylim()
+            self._update_range_entries(low, high)
             self.canvas.draw_idle()
 
             msg = f"Plotted {len(labels)} bar(s)."
@@ -1123,6 +1248,7 @@ class DashboardDataPlotter(tk.Tk):
                 messagebox.showwarning(
                     "Partial plot", msg + "\n\n" + "\n".join(errors))
             self.status.set(msg)
+            self._push_history()
             return
 
         # ---- RADAR PLOT ----
@@ -1142,7 +1268,6 @@ class DashboardDataPlotter(tk.Tk):
         plotted, errors = 0, []
 
         if not compare:
-            range_values = []
             for sid in self.get_plot_order_source_ids():
                 if not self.show_flag.get(sid, True):
                     continue
@@ -1159,7 +1284,6 @@ class DashboardDataPlotter(tk.Tk):
 
                     self.ax.plot(theta, val2, marker="o",
                                  markersize=3, linewidth=1.5, label=label)
-                    range_values.append(val2)
                     plotted += 1
                 except Exception as e:
                     errors.append(f"{label}: {e}")
@@ -1171,16 +1295,13 @@ class DashboardDataPlotter(tk.Tk):
             if plotted:
                 self.ax.legend(loc="upper left", bbox_to_anchor=(
                     1.02, 1.05), fontsize=9, frameon=False)
-            if range_values:
-                range_minmax = self._minmax_from_values(
-                    np.concatenate(range_values))
-                if range_minmax:
-                    self._update_range_entries(*range_minmax)
             if fixed_range:
                 self.ax.set_rlim(fixed_range[0], fixed_range[1])
             else:
                 self.ax.autoscale(enable=True, axis="y")
                 self.ax.autoscale_view(scaley=True)
+            low, high = self.ax.get_ylim()
+            self._update_range_entries(low, high)
             fmt_abs_ticks(self.ax)
 
         else:
@@ -1197,8 +1318,6 @@ class DashboardDataPlotter(tk.Tk):
 
             deltas_by_id = {}
             max_abs = 0.0
-            range_values = []
-
             for sid in self.get_plot_order_source_ids():
                 if not self.show_flag.get(sid, True):
                     continue
@@ -1222,7 +1341,6 @@ class DashboardDataPlotter(tk.Tk):
                     ang_deg2 = ang_deg2[order]
                     delta2 = delta2[order]
                     deltas_by_id[sid] = (ang_deg2, delta2)
-                    range_values.append(delta2)
                     this_max = float(np.nanmax(np.abs(delta2)))
                     if np.isfinite(this_max):
                         max_abs = max(max_abs, this_max)
@@ -1238,11 +1356,6 @@ class DashboardDataPlotter(tk.Tk):
             if max_abs <= 0 or not np.isfinite(max_abs):
                 max_abs = 1.0
             offset = 1.10 * max_abs
-            if range_values:
-                range_minmax = self._minmax_from_values(
-                    np.concatenate(range_values))
-                if range_minmax:
-                    self._update_range_entries(*range_minmax)
 
             theta_ring = np.linspace(0, 2 * np.pi, 361)
             r_ring = np.full_like(theta_ring, offset, dtype=float)
@@ -1273,6 +1386,8 @@ class DashboardDataPlotter(tk.Tk):
             else:
                 self.ax.autoscale(enable=True, axis="y")
                 self.ax.autoscale_view(scaley=True)
+            low, high = self.ax.get_ylim()
+            self._update_range_entries(low - offset, high - offset)
             fmt_delta_ticks(self.ax, offset)
 
         self.canvas.draw_idle()
@@ -1282,6 +1397,7 @@ class DashboardDataPlotter(tk.Tk):
             messagebox.showwarning(
                 "Partial plot", msg + "\n\n" + "\n".join(errors))
         self.status.set(msg)
+        self._push_history()
 
 
 def main():

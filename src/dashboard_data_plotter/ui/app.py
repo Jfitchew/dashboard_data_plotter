@@ -3,6 +3,7 @@ from dashboard_data_plotter.plotting.helpers import (
     circular_interp_baseline,
     fmt_abs_ticks,
     fmt_delta_ticks,
+    choose_decimals_from_ticks,
 )
 from dashboard_data_plotter.data.loaders import (
     DEFAULT_SENTINELS,
@@ -15,16 +16,21 @@ from dashboard_data_plotter.data.loaders import (
 )
 from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
 from dashboard_data_plotter.utils.log import log_exception, DEFAULT_LOG_PATH
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import os
 import json
 from datetime import datetime
+import tempfile
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
+import webbrowser
 
 import numpy as np
 import pandas as pd
+
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+import plotly.graph_objects as go
+import plotly.io as pio
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -55,6 +61,9 @@ class DashboardDataPlotter(tk.Tk):
 
         # Plot type
         self.plot_type_var = tk.StringVar(value="radar")  # "radar" or "bar"
+
+        # Plot backend
+        self.use_plotly_var = tk.BooleanVar(value=False)
 
         # Comparison mode
         self.compare_var = tk.BooleanVar(value=False)
@@ -179,6 +188,8 @@ class DashboardDataPlotter(tk.Tk):
                         command=self._on_plot_type_change).grid(row=0, column=1, sticky="w")
         ttk.Radiobutton(angle_frame, text="Bar (avg)", variable=self.plot_type_var, value="bar",
                         command=self._on_plot_type_change).grid(row=0, column=1, sticky="e")
+        ttk.Checkbutton(angle_frame, text="Use Plotly (interactive)",
+                        variable=self.use_plotly_var).grid(row=2, column=0, columnspan=2, sticky="w")
         ttk.Label(angle_frame, text="Angle column:").grid(
             row=1, column=0, sticky="w")
         self.angle_combo = ttk.Combobox(
@@ -686,6 +697,203 @@ class DashboardDataPlotter(tk.Tk):
             return to_percent_of_mean(values), "% of mean"
         raise ValueError(f"Unknown value mode: {mode}")
 
+    def _open_plotly_figure(self, fig: go.Figure, title: str):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as handle:
+            out_path = handle.name
+        pio.write_html(fig, file=out_path, auto_open=False, include_plotlyjs="cdn")
+        webbrowser.open(f"file://{out_path}")
+        self.status.set(f"{title} (interactive Plotly plot opened in browser).")
+
+    def _plot_plotly_bar(self, angle_col, metric_col, sentinels, value_mode,
+                         compare, baseline_id, baseline_display):
+        ordered = []
+        for sid in self.get_plot_order_source_ids():
+            if compare and sid == baseline_id:
+                ordered.append(sid)
+            elif self.show_flag.get(sid, True):
+                ordered.append(sid)
+        if compare and baseline_id and baseline_id not in ordered:
+            ordered.append(baseline_id)
+
+        baseline_mean = 0.0
+        if compare:
+            b_ang_deg, b_val = prepare_angle_value(
+                self.loaded[baseline_id], angle_col or "leftPedalCrankAngle", metric_col, sentinels)
+            b_val2, _ = self._apply_value_mode(b_val, value_mode)
+            baseline_mean = float(np.nanmean(b_val2))
+
+        labels, heights, errors = [], [], []
+        for sid in ordered:
+            label = self.id_to_display.get(sid, os.path.basename(sid))
+            try:
+                ang_deg, val = prepare_angle_value(
+                    self.loaded[sid], angle_col or "leftPedalCrankAngle", metric_col, sentinels)
+                val2, _ = self._apply_value_mode(val, value_mode)
+                mval = float(np.nanmean(val2))
+                heights.append(0.0 if compare and sid == baseline_id else (
+                    mval - baseline_mean if compare else mval))
+                labels.append(label)
+            except Exception as e:
+                errors.append(f"{label}: {e}")
+
+        if not labels:
+            messagebox.showinfo("Nothing to plot",
+                                "No datasets produced valid bar values.")
+            return
+
+        mode_str = "absolute" if value_mode == "absolute" else "% of mean"
+        if compare:
+            b_label = self.id_to_display.get(baseline_id, baseline_display)
+            title = f"Mean {metric_col} difference vs baseline {b_label} ({mode_str})"
+            y_title = "Difference vs baseline"
+        else:
+            title = f"Mean {metric_col} per dataset ({mode_str})"
+            y_title = metric_col
+
+        fig = go.Figure()
+        fig.add_bar(x=labels, y=heights, marker_color="#1f77b4")
+        fig.update_layout(
+            title=title,
+            xaxis_title="Dataset",
+            yaxis_title=y_title,
+            xaxis_tickangle=-45,
+        )
+        fig.add_shape(type="line", x0=-0.5, x1=max(len(labels) - 0.5, 0.5),
+                      y0=0, y1=0, line=dict(color="red" if compare else "black", width=1.2))
+
+        self._open_plotly_figure(fig, f"Plotted {len(labels)} bar(s).")
+        if errors:
+            messagebox.showwarning(
+                "Partial plot", f"Plotted {len(labels)} bar(s) with errors.\n\n" + "\n".join(errors))
+
+    def _plot_plotly_radar(self, angle_col, metric_col, sentinels, value_mode, close_loop,
+                           compare, baseline_id, baseline_display):
+        plotted, errors = 0, []
+        fig = go.Figure()
+
+        if not compare:
+            for sid in self.get_plot_order_source_ids():
+                if not self.show_flag.get(sid, True):
+                    continue
+                label = self.id_to_display.get(sid, os.path.basename(sid))
+                try:
+                    ang_deg, val = prepare_angle_value(
+                        self.loaded[sid], angle_col, metric_col, sentinels)
+                    val2, _ = self._apply_value_mode(val, value_mode)
+                    theta = np.asarray(ang_deg, dtype=float)
+                    r = np.asarray(val2, dtype=float)
+                    if close_loop and len(theta) > 2:
+                        theta = np.concatenate([theta, [theta[0]]])
+                        r = np.concatenate([r, [r[0]]])
+                    fig.add_scatterpolar(
+                        theta=theta, r=r, mode="lines+markers", name=label, marker=dict(size=4))
+                    plotted += 1
+                except Exception as e:
+                    errors.append(f"{label}: {e}")
+
+            mode_str = "absolute" if value_mode == "absolute" else "% of mean"
+            fig.update_layout(
+                title=f"{metric_col} ({mode_str})",
+                polar=dict(
+                    angularaxis=dict(direction="clockwise", rotation=90),
+                ),
+                showlegend=True,
+            )
+        else:
+            b_label = self.id_to_display.get(
+                baseline_id, os.path.basename(baseline_id))
+            try:
+                b_ang_deg, b_val = prepare_angle_value(
+                    self.loaded[baseline_id], angle_col, metric_col, sentinels)
+                b_val2, _ = self._apply_value_mode(b_val, value_mode)
+            except Exception as e:
+                messagebox.showerror(
+                    "Baseline error", f"Baseline '{b_label}' failed:\n{e}")
+                return
+
+            deltas_by_id = {}
+            max_abs = 0.0
+
+            for sid in self.get_plot_order_source_ids():
+                if not self.show_flag.get(sid, True):
+                    continue
+                if sid == baseline_id:
+                    continue
+                label = self.id_to_display.get(sid, os.path.basename(sid))
+                try:
+                    ang_deg, val = prepare_angle_value(
+                        self.loaded[sid], angle_col, metric_col, sentinels)
+                    val2, _ = self._apply_value_mode(val, value_mode)
+                    base_at = circular_interp_baseline(
+                        b_ang_deg, b_val2, ang_deg)
+                    delta = val2 - base_at
+                    m = np.isfinite(delta) & np.isfinite(ang_deg)
+                    ang_deg2 = ang_deg[m]
+                    delta2 = delta[m]
+                    if len(ang_deg2) == 0:
+                        raise ValueError(
+                            "No valid comparison values after filtering.")
+                    order = np.argsort(ang_deg2)
+                    ang_deg2 = ang_deg2[order]
+                    delta2 = delta2[order]
+                    deltas_by_id[sid] = (ang_deg2, delta2)
+                    this_max = float(np.nanmax(np.abs(delta2)))
+                    if np.isfinite(this_max):
+                        max_abs = max(max_abs, this_max)
+                except Exception as e:
+                    errors.append(f"{label}: {e}")
+
+            if not deltas_by_id:
+                messagebox.showinfo(
+                    "Nothing to plot", "No non-baseline datasets produced valid comparison traces.")
+                return
+
+            if max_abs <= 0 or not np.isfinite(max_abs):
+                max_abs = 1.0
+            offset = 1.10 * max_abs
+
+            theta_ring = np.linspace(0, 360, 361)
+            r_ring = np.full_like(theta_ring, offset, dtype=float)
+            fig.add_scatterpolar(
+                theta=theta_ring, r=r_ring, mode="lines", line=dict(width=2.2, color="red"),
+                name=f"Baseline = 0 ({b_label})")
+
+            for sid, (ang_deg2, delta2) in deltas_by_id.items():
+                label = self.id_to_display.get(sid, os.path.basename(sid))
+                theta = np.asarray(ang_deg2, dtype=float)
+                r = np.asarray(delta2 + offset, dtype=float)
+                if close_loop and len(theta) > 2:
+                    theta = np.concatenate([theta, [theta[0]]])
+                    r = np.concatenate([r, [r[0]]])
+                fig.add_scatterpolar(
+                    theta=theta, r=r, mode="lines+markers", name=label, marker=dict(size=4))
+                plotted += 1
+
+            tick_vals = np.linspace(-max_abs, max_abs, 5)
+            decimals = choose_decimals_from_ticks(tick_vals)
+            tick_text = [f"{v:.{decimals}f}" for v in tick_vals]
+            tick_positions = tick_vals + offset
+
+            mode_str = "absolute" if value_mode == "absolute" else "% of mean"
+            fig.update_layout(
+                title=f"{metric_col} ({mode_str}) difference to Baseline ({b_label})",
+                polar=dict(
+                    angularaxis=dict(direction="clockwise", rotation=90),
+                    radialaxis=dict(tickvals=tick_positions, ticktext=tick_text),
+                ),
+                showlegend=True,
+            )
+
+        if plotted == 0:
+            messagebox.showinfo(
+                "Nothing to plot", "No datasets produced valid radar values.")
+            return
+
+        self._open_plotly_figure(fig, f"Plotted {plotted} trace(s).")
+        if errors:
+            messagebox.showwarning(
+                "Partial plot", f"Plotted {plotted} trace(s) with errors.\n\n" + "\n".join(errors))
+
     def plot(self):
         if not self.loaded:
             messagebox.showinfo(
@@ -714,6 +922,21 @@ class DashboardDataPlotter(tk.Tk):
         plot_type = (self.plot_type_var.get() or "radar").strip().lower()
         if plot_type == "bar" and value_mode == "percent_mean":
             value_mode = "absolute"
+
+        if self.use_plotly_var.get():
+            if plot_type == "bar":
+                self._plot_plotly_bar(
+                    angle_col, metric_col, sentinels, value_mode,
+                    compare, baseline_id, baseline_display)
+                return
+            if not angle_col:
+                messagebox.showinfo(
+                    "Missing selection", "Select an angle column (required for Radar plot).")
+                return
+            self._plot_plotly_radar(
+                angle_col, metric_col, sentinels, value_mode, close_loop,
+                compare, baseline_id, baseline_display)
+            return
 
         # ---- BAR PLOT ----
         if plot_type == "bar":

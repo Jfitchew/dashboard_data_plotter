@@ -65,6 +65,11 @@ class DashboardDataPlotter(tk.Tk):
         # Plot backend
         self.use_plotly_var = tk.BooleanVar(value=False)
 
+        # Plot range controls
+        self.range_low_var = tk.StringVar(value="")
+        self.range_high_var = tk.StringVar(value="")
+        self.range_fixed_var = tk.BooleanVar(value=False)
+
         # Comparison mode
         self.compare_var = tk.BooleanVar(value=False)
         self.baseline_display_var = tk.StringVar(value="")
@@ -212,6 +217,17 @@ class DashboardDataPlotter(tk.Tk):
             metric_frame, textvariable=self.metric_var, values=[], state="readonly", width=30)
         self.metric_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
+        range_frame = ttk.Frame(left)
+        range_frame.grid(row=10, column=0, sticky="ew", pady=(6, 2))
+        ttk.Label(range_frame, text="Range (min, max):").grid(
+            row=0, column=0, sticky="w")
+        ttk.Entry(range_frame, textvariable=self.range_low_var,
+                  width=10).grid(row=0, column=1, sticky="w", padx=(8, 4))
+        ttk.Entry(range_frame, textvariable=self.range_high_var,
+                  width=10).grid(row=0, column=2, sticky="w")
+        ttk.Checkbutton(range_frame, text="Fixed",
+                        variable=self.range_fixed_var).grid(row=0, column=3, sticky="w", padx=(8, 0))
+
         sentinel_frame = ttk.Frame(left)
         sentinel_frame.grid(row=11, column=0, sticky="ew", pady=(6, 2))
         ttk.Label(sentinel_frame, text="Invalid values:").grid(
@@ -315,6 +331,47 @@ class DashboardDataPlotter(tk.Tk):
         except Exception:
             pass
 
+    def _get_fixed_range(self):
+        if not self.range_fixed_var.get():
+            return None
+        low_s = self.range_low_var.get().strip()
+        high_s = self.range_high_var.get().strip()
+        if not low_s or not high_s:
+            messagebox.showinfo(
+                "Range required", "Enter both lower and upper range values or untick Fixed.")
+            return "invalid"
+        try:
+            low = float(low_s)
+            high = float(high_s)
+        except ValueError:
+            messagebox.showinfo(
+                "Invalid range", "Range values must be valid numbers.")
+            return "invalid"
+        if not (np.isfinite(low) and np.isfinite(high)):
+            messagebox.showinfo(
+                "Invalid range", "Range values must be finite numbers.")
+            return "invalid"
+        if low > high:
+            messagebox.showinfo(
+                "Invalid range", "Lower range must be less than or equal to upper range.")
+            return "invalid"
+        return (low, high)
+
+    def _update_range_entries(self, low, high):
+        if self.range_fixed_var.get():
+            return
+        if low is None or high is None:
+            return
+        self.range_low_var.set(f"{low:.6g}")
+        self.range_high_var.set(f"{high:.6g}")
+
+    def _minmax_from_values(self, values):
+        arr = np.asarray(values, dtype=float).ravel()
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            return None
+        return float(np.nanmin(arr)), float(np.nanmax(arr))
+
     def _on_plot_type_change(self):
         is_bar = (self.plot_type_var.get() == "bar")
         if hasattr(self, "rb_percent_mean"):
@@ -324,8 +381,25 @@ class DashboardDataPlotter(tk.Tk):
             self.value_mode_var.set("absolute")
         self._set_plot_type_controls_state()
 
+    def _can_autoplot(self):
+        if not self.loaded:
+            return False
+        if not self.metric_var.get().strip():
+            return False
+        plot_type = (self.plot_type_var.get() or "radar").strip().lower()
+        if plot_type == "radar" and not self.angle_var.get().strip():
+            return False
+        if self.compare_var.get():
+            baseline_display = self.baseline_display_var.get().strip()
+            baseline_id = self.display_to_id.get(baseline_display, "")
+            if not baseline_id or baseline_id not in self.loaded:
+                return False
+        return True
+
     def _on_compare_toggle(self):
         self._set_compare_controls_state()
+        if not self.use_plotly_var.get() and self._can_autoplot():
+            self.plot()
 
     # ---------------- Tree / list actions ----------------
     def _on_tree_click(self, event):
@@ -710,7 +784,7 @@ class DashboardDataPlotter(tk.Tk):
             f"{title} (interactive Plotly plot opened in browser).")
 
     def _plot_plotly_bar(self, angle_col, metric_col, sentinels, value_mode,
-                         compare, baseline_id, baseline_display):
+                         compare, baseline_id, baseline_display, fixed_range):
         ordered = []
         for sid in self.get_plot_order_source_ids():
             if compare and sid == baseline_id:
@@ -745,6 +819,9 @@ class DashboardDataPlotter(tk.Tk):
             messagebox.showinfo("Nothing to plot",
                                 "No datasets produced valid bar values.")
             return
+        range_minmax = self._minmax_from_values(heights)
+        if range_minmax:
+            self._update_range_entries(*range_minmax)
 
         mode_str = "absolute" if value_mode == "absolute" else "% of mean"
         if compare:
@@ -763,6 +840,8 @@ class DashboardDataPlotter(tk.Tk):
             yaxis_title=y_title,
             xaxis_tickangle=-45,
         )
+        if fixed_range:
+            fig.update_yaxes(range=[fixed_range[0], fixed_range[1]])
         fig.add_shape(type="line", x0=-0.5, x1=max(len(labels) - 0.5, 0.5),
                       y0=0, y1=0, line=dict(color="red" if compare else "black", width=1.2))
 
@@ -772,11 +851,12 @@ class DashboardDataPlotter(tk.Tk):
                 "Partial plot", f"Plotted {len(labels)} bar(s) with errors.\n\n" + "\n".join(errors))
 
     def _plot_plotly_radar(self, angle_col, metric_col, sentinels, value_mode, close_loop,
-                           compare, baseline_id, baseline_display):
+                           compare, baseline_id, baseline_display, fixed_range):
         plotted, errors = 0, []
         fig = go.Figure()
 
         if not compare:
+            range_values = []
             for sid in self.get_plot_order_source_ids():
                 if not self.show_flag.get(sid, True):
                     continue
@@ -792,9 +872,16 @@ class DashboardDataPlotter(tk.Tk):
                         r = np.concatenate([r, [r[0]]])
                     fig.add_scatterpolar(
                         theta=theta, r=r, mode="lines+markers", name=label, marker=dict(size=4))
+                    range_values.append(val2)
                     plotted += 1
                 except Exception as e:
                     errors.append(f"{label}: {e}")
+
+            if range_values:
+                range_minmax = self._minmax_from_values(
+                    np.concatenate(range_values))
+                if range_minmax:
+                    self._update_range_entries(*range_minmax)
 
             mode_str = "absolute" if value_mode == "absolute" else "% of mean"
             fig.update_layout(
@@ -804,6 +891,9 @@ class DashboardDataPlotter(tk.Tk):
                 ),
                 showlegend=True,
             )
+            if fixed_range:
+                fig.update_layout(
+                    polar=dict(radialaxis=dict(range=[fixed_range[0], fixed_range[1]])))
         else:
             b_label = self.id_to_display.get(
                 baseline_id, os.path.basename(baseline_id))
@@ -818,6 +908,7 @@ class DashboardDataPlotter(tk.Tk):
 
             deltas_by_id = {}
             max_abs = 0.0
+            range_values = []
 
             for sid in self.get_plot_order_source_ids():
                 if not self.show_flag.get(sid, True):
@@ -842,6 +933,7 @@ class DashboardDataPlotter(tk.Tk):
                     ang_deg2 = ang_deg2[order]
                     delta2 = delta2[order]
                     deltas_by_id[sid] = (ang_deg2, delta2)
+                    range_values.append(delta2)
                     this_max = float(np.nanmax(np.abs(delta2)))
                     if np.isfinite(this_max):
                         max_abs = max(max_abs, this_max)
@@ -856,6 +948,12 @@ class DashboardDataPlotter(tk.Tk):
             if max_abs <= 0 or not np.isfinite(max_abs):
                 max_abs = 1.0
             offset = 1.10 * max_abs
+
+            if range_values:
+                range_minmax = self._minmax_from_values(
+                    np.concatenate(range_values))
+                if range_minmax:
+                    self._update_range_entries(*range_minmax)
 
             theta_ring = np.linspace(0, 360, 361)
             r_ring = np.full_like(theta_ring, offset, dtype=float)
@@ -880,12 +978,15 @@ class DashboardDataPlotter(tk.Tk):
             tick_positions = tick_vals + offset
 
             mode_str = "absolute" if value_mode == "absolute" else "% of mean"
+            radialaxis = dict(tickvals=tick_positions, ticktext=tick_text)
+            if fixed_range:
+                radialaxis["range"] = [offset + fixed_range[0],
+                                       offset + fixed_range[1]]
             fig.update_layout(
                 title=f"{metric_col} ({mode_str}) difference to Baseline ({b_label})",
                 polar=dict(
                     angularaxis=dict(direction="clockwise", rotation=90),
-                    radialaxis=dict(tickvals=tick_positions,
-                                    ticktext=tick_text),
+                    radialaxis=radialaxis,
                 ),
                 showlegend=True,
             )
@@ -929,11 +1030,15 @@ class DashboardDataPlotter(tk.Tk):
         if plot_type == "bar" and value_mode == "percent_mean":
             value_mode = "absolute"
 
+        fixed_range = self._get_fixed_range()
+        if fixed_range == "invalid":
+            return
+
         if self.use_plotly_var.get():
             if plot_type == "bar":
                 self._plot_plotly_bar(
                     angle_col, metric_col, sentinels, value_mode,
-                    compare, baseline_id, baseline_display)
+                    compare, baseline_id, baseline_display, fixed_range)
                 return
             if not angle_col:
                 messagebox.showinfo(
@@ -941,7 +1046,7 @@ class DashboardDataPlotter(tk.Tk):
                 return
             self._plot_plotly_radar(
                 angle_col, metric_col, sentinels, value_mode, close_loop,
-                compare, baseline_id, baseline_display)
+                compare, baseline_id, baseline_display, fixed_range)
             return
 
         # ---- BAR PLOT ----
@@ -984,6 +1089,10 @@ class DashboardDataPlotter(tk.Tk):
                 self._redraw_empty()
                 return
 
+            range_minmax = self._minmax_from_values(heights)
+            if range_minmax:
+                self._update_range_entries(*range_minmax)
+
             x = np.arange(len(labels))
             self.ax.axhline(
                 0.0, color="red" if compare else "black", linewidth=1.2)
@@ -1001,6 +1110,9 @@ class DashboardDataPlotter(tk.Tk):
                 self.ax.set_title(
                     f"Mean {metric_col} per dataset ({mode_str})")
                 self.ax.set_ylabel(metric_col)
+
+            if fixed_range:
+                self.ax.set_ylim(fixed_range[0], fixed_range[1])
 
             self.ax.grid(True, axis="y", linestyle=":")
             self.canvas.draw_idle()
@@ -1030,6 +1142,7 @@ class DashboardDataPlotter(tk.Tk):
         plotted, errors = 0, []
 
         if not compare:
+            range_values = []
             for sid in self.get_plot_order_source_ids():
                 if not self.show_flag.get(sid, True):
                     continue
@@ -1046,6 +1159,7 @@ class DashboardDataPlotter(tk.Tk):
 
                     self.ax.plot(theta, val2, marker="o",
                                  markersize=3, linewidth=1.5, label=label)
+                    range_values.append(val2)
                     plotted += 1
                 except Exception as e:
                     errors.append(f"{label}: {e}")
@@ -1057,6 +1171,16 @@ class DashboardDataPlotter(tk.Tk):
             if plotted:
                 self.ax.legend(loc="upper left", bbox_to_anchor=(
                     1.02, 1.05), fontsize=9, frameon=False)
+            if range_values:
+                range_minmax = self._minmax_from_values(
+                    np.concatenate(range_values))
+                if range_minmax:
+                    self._update_range_entries(*range_minmax)
+            if fixed_range:
+                self.ax.set_rlim(fixed_range[0], fixed_range[1])
+            else:
+                self.ax.autoscale(enable=True, axis="y")
+                self.ax.autoscale_view(scaley=True)
             fmt_abs_ticks(self.ax)
 
         else:
@@ -1073,6 +1197,7 @@ class DashboardDataPlotter(tk.Tk):
 
             deltas_by_id = {}
             max_abs = 0.0
+            range_values = []
 
             for sid in self.get_plot_order_source_ids():
                 if not self.show_flag.get(sid, True):
@@ -1097,6 +1222,7 @@ class DashboardDataPlotter(tk.Tk):
                     ang_deg2 = ang_deg2[order]
                     delta2 = delta2[order]
                     deltas_by_id[sid] = (ang_deg2, delta2)
+                    range_values.append(delta2)
                     this_max = float(np.nanmax(np.abs(delta2)))
                     if np.isfinite(this_max):
                         max_abs = max(max_abs, this_max)
@@ -1112,6 +1238,11 @@ class DashboardDataPlotter(tk.Tk):
             if max_abs <= 0 or not np.isfinite(max_abs):
                 max_abs = 1.0
             offset = 1.10 * max_abs
+            if range_values:
+                range_minmax = self._minmax_from_values(
+                    np.concatenate(range_values))
+                if range_minmax:
+                    self._update_range_entries(*range_minmax)
 
             theta_ring = np.linspace(0, 2 * np.pi, 361)
             r_ring = np.full_like(theta_ring, offset, dtype=float)
@@ -1136,6 +1267,12 @@ class DashboardDataPlotter(tk.Tk):
             self.ax.legend(loc="upper left", bbox_to_anchor=(
                 1.02, 1.05), fontsize=9, frameon=False)
             self.ax.set_position([0.02, 0.08, 0.8, 0.8])
+            if fixed_range:
+                self.ax.set_rlim(offset + fixed_range[0],
+                                 offset + fixed_range[1])
+            else:
+                self.ax.autoscale(enable=True, axis="y")
+                self.ax.autoscale_view(scaley=True)
             fmt_delta_ticks(self.ax, offset)
 
         self.canvas.draw_idle()

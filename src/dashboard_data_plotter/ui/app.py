@@ -1932,7 +1932,7 @@ class DashboardDataPlotter(tk.Tk):
                     transform=ax.get_xaxis_transform(),
                     zorder=0,
                     aspect="auto",
-                    alpha=0.18,
+                    alpha=0.40,
                 )
             except Exception:
                 pass
@@ -2046,6 +2046,7 @@ class DashboardDataPlotter(tk.Tk):
             transform=ax.transAxes,
             zorder=0,
             aspect="auto",
+            alpha=0.5,
         )
 
 

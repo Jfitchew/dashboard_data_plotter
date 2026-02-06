@@ -18,6 +18,7 @@ from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
 from dashboard_data_plotter.utils.log import log_exception, DEFAULT_LOG_PATH
 import os
 import json
+import base64
 from datetime import datetime
 import tempfile
 import tkinter as tk
@@ -29,6 +30,7 @@ import pandas as pd
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib import image as mpimg
 import plotly.graph_objects as go
 import plotly.io as pio
 
@@ -1117,6 +1119,7 @@ class DashboardDataPlotter(tk.Tk):
                            compare, baseline_id, baseline_display, fixed_range):
         plotted, errors = 0, []
         fig = go.Figure()
+        self._apply_radar_background_plotly(fig)
 
         if not compare:
             range_values = []
@@ -1151,6 +1154,7 @@ class DashboardDataPlotter(tk.Tk):
                 title=f"{metric_col} ({mode_str})",
                 polar=dict(
                     angularaxis=dict(direction="clockwise", rotation=90),
+                    bgcolor="rgba(0,0,0,0)",
                 ),
                 showlegend=True,
             )
@@ -1250,6 +1254,7 @@ class DashboardDataPlotter(tk.Tk):
                 polar=dict(
                     angularaxis=dict(direction="clockwise", rotation=90),
                     radialaxis=radialaxis,
+                    bgcolor="rgba(0,0,0,0)",
                 ),
                 showlegend=True,
             )
@@ -1534,6 +1539,7 @@ class DashboardDataPlotter(tk.Tk):
         self.ax.clear()
         self.ax.set_theta_zero_location("N")
         self.ax.set_theta_direction(-1)
+        self._apply_radar_background_matplotlib(self.ax)
 
         plotted, errors = 0, []
 
@@ -1668,6 +1674,58 @@ class DashboardDataPlotter(tk.Tk):
                 "Partial plot", msg + "\n\n" + "\n".join(errors))
         self.status.set(msg)
         self._push_history()
+
+    def _radar_background_image_path(self):
+        return os.path.normpath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "..",
+                "assets",
+                "radar_background.png",
+            )
+        )
+
+    def _apply_radar_background_plotly(self, fig):
+        image_path = self._radar_background_image_path()
+        if not os.path.isfile(image_path):
+            return
+        try:
+            with open(image_path, "rb") as handle:
+                encoded = base64.b64encode(handle.read()).decode("ascii")
+        except OSError:
+            return
+
+        fig.add_layout_image(
+            dict(
+                source=f"data:image/png;base64,{encoded}",
+                xref="paper",
+                yref="paper",
+                x=0.5,
+                y=0.5,
+                sizex=0.9,
+                sizey=0.9,
+                xanchor="center",
+                yanchor="middle",
+                layer="below",
+            )
+        )
+
+    def _apply_radar_background_matplotlib(self, ax):
+        image_path = self._radar_background_image_path()
+        if not os.path.isfile(image_path):
+            return
+        try:
+            image = mpimg.imread(image_path)
+        except Exception:
+            return
+        ax.set_facecolor("none")
+        ax.imshow(
+            image,
+            extent=[0, 1, 0, 1],
+            transform=ax.transAxes,
+            zorder=0,
+            aspect="auto",
+        )
 
 
 def main():

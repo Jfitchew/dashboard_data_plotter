@@ -54,6 +54,7 @@ but the app is tolerant of missing or sparse data.
   - 0° = Top Dead Centre (TDC)
   - Clockwise positive
 - Automatically converts Body Rocket crank‑angle conventions
+- Optional background image support for radar plots (see below)
 - Supports:
   - Absolute metric values
   - % of dataset mean
@@ -109,6 +110,19 @@ When the **Use Plotly (interactive)** option is enabled, plots are rendered as i
 in your default web browser instead of the embedded Matplotlib canvas.
 
 Dataset order in the **Data Sources panel defines plotting order everywhere**.
+
+---
+
+## Radar background image (optional)
+
+If you want a background image behind radar plots, place a PNG at:
+
+```
+src/dashboard_data_plotter/assets/radar_background.png
+```
+
+When present, the image is rendered behind both the Matplotlib and Plotly radar plots. If the file
+is missing, radar plots render normally without a background.
 
 ---
 

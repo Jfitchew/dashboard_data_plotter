@@ -368,7 +368,8 @@ class DashboardDataPlotter(tk.Tk):
             pass
         try:
             self.radar_background_chk.configure(
-                state="normal" if plot_type == "radar" else "disabled"
+                state="normal" if plot_type in (
+                    "radar", "cartesian") else "disabled"
             )
         except Exception:
             pass
@@ -1027,6 +1028,7 @@ class DashboardDataPlotter(tk.Tk):
                                compare, baseline_id, baseline_display, fixed_range):
         plotted, errors = 0, []
         fig = go.Figure()
+        self._apply_cartesian_background_plotly(fig)
         range_values = []
 
         if not compare:
@@ -1458,6 +1460,7 @@ class DashboardDataPlotter(tk.Tk):
             self.fig.clf()
             self.ax = self.fig.add_subplot(111)
             self.ax.clear()
+            self._apply_cartesian_background_matplotlib(self.ax)
 
             plotted, errors = 0, []
             range_values = []
@@ -1741,6 +1744,16 @@ class DashboardDataPlotter(tk.Tk):
                 return path
         return candidates[0]
 
+    def _cartesian_background_image_path(self):
+        base_dir = os.path.normpath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "..",
+                "assets",
+            )
+        )
+        return os.path.join(base_dir, "leg_muscles.jpeg")
+
     def _apply_radar_background_plotly(self, fig):
         if not self.radar_background_var.get():
             return False
@@ -1770,6 +1783,125 @@ class DashboardDataPlotter(tk.Tk):
             )
         )
         fig.update_layout(paper_bgcolor="rgba(0,0,0,0)")
+        return True
+
+    def _cartesian_background_bands(self):
+        return [
+            (355.0, 95.0, "#E43C2F"),
+            (80.0, 170.0, "#F48117"),
+            (150.0, 185.0, "#F9DB2B"),
+            (175.0, 235.0, "#3A9256"),
+            (210.0, 275.0, "#2F8ADB"),
+            (265.0, 5.0, "#8C58BD"),
+        ]
+
+    def _apply_cartesian_background_matplotlib(self, ax):
+        if not self.radar_background_var.get():
+            return False
+        image_path = self._cartesian_background_image_path()
+        if os.path.isfile(image_path):
+            try:
+                image = mpimg.imread(image_path)
+                ax.imshow(
+                    image,
+                    extent=[120, 240, 0, 0.65],
+                    transform=ax.get_xaxis_transform(),
+                    zorder=0,
+                    aspect="auto",
+                    alpha=0.18,
+                )
+            except Exception:
+                pass
+        for idx, (start, end, color) in enumerate(self._cartesian_background_bands()):
+            if idx % 2 == 0:
+                ymin, ymax = 0.6, 0.8
+            else:
+                ymin, ymax = 0.7, 0.9
+            if start <= end:
+                ax.axvspan(start, end, ymin=ymin, ymax=ymax,
+                           color=color, alpha=0.18, zorder=1)
+            else:
+                ax.axvspan(start, 360.0, ymin=ymin, ymax=ymax,
+                           color=color, alpha=0.18, zorder=1)
+                ax.axvspan(0.0, end, ymin=ymin, ymax=ymax,
+                           color=color, alpha=0.18, zorder=1)
+        return True
+
+    def _apply_cartesian_background_plotly(self, fig):
+        if not self.radar_background_var.get():
+            return False
+        image_path = self._cartesian_background_image_path()
+        if os.path.isfile(image_path):
+            try:
+                with open(image_path, "rb") as handle:
+                    encoded = base64.b64encode(handle.read()).decode("ascii")
+                fig.add_layout_image(
+                    dict(
+                        source=f"data:image/jpeg;base64,{encoded}",
+                        xref="paper",
+                        yref="paper",
+                        x=0.5,
+                        y=0.5,
+                        sizex=1.0,
+                        sizey=1.0,
+                        sizing="contain",
+                        xanchor="center",
+                        yanchor="middle",
+                        layer="below",
+                        opacity=0.18,
+                    )
+                )
+            except OSError:
+                pass
+        shapes = []
+        for idx, (start, end, color) in enumerate(self._cartesian_background_bands()):
+            if idx % 2 == 0:
+                y0, y1 = 0.6, 0.8
+            else:
+                y0, y1 = 0.7, 0.9
+            if start <= end:
+                shapes.append(dict(
+                    type="rect",
+                    xref="x",
+                    yref="paper",
+                    x0=start,
+                    x1=end,
+                    y0=y0,
+                    y1=y1,
+                    fillcolor=color,
+                    opacity=0.18,
+                    line=dict(width=0),
+                    layer="below",
+                ))
+            else:
+                shapes.append(dict(
+                    type="rect",
+                    xref="x",
+                    yref="paper",
+                    x0=start,
+                    x1=360.0,
+                    y0=y0,
+                    y1=y1,
+                    fillcolor=color,
+                    opacity=0.18,
+                    line=dict(width=0),
+                    layer="below",
+                ))
+                shapes.append(dict(
+                    type="rect",
+                    xref="x",
+                    yref="paper",
+                    x0=0.0,
+                    x1=end,
+                    y0=y0,
+                    y1=y1,
+                    fillcolor=color,
+                    opacity=0.18,
+                    line=dict(width=0),
+                    layer="below",
+                ))
+        if shapes:
+            fig.update_layout(shapes=shapes)
         return True
 
     def _apply_radar_background_matplotlib(self, ax):

@@ -42,7 +42,7 @@ class DashboardDataPlotter(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Dashboard Data Plotter (Tkinter)")
-        self.geometry("1390x860")
+        self.geometry("1360x876")
 
         # Internal storage:
         #   source_id: unique ID (file path, or "PASTE::<name>")
@@ -1607,10 +1607,10 @@ class DashboardDataPlotter(tk.Tk):
             mode_str = "absolute" if value_mode == "absolute" else "% of mean"
             self.ax.set_title(f"{metric_col} ({mode_str})", pad=18)
             self.ax.grid(True)
-            self.ax.set_position([0.02, 0.08, 0.8, 0.8])
+            self.ax.set_position([0.05, 0.05, 0.75, 0.80])
             if plotted:
-                self.ax.legend(loc="upper left", bbox_to_anchor=(
-                    1.02, 1.05), fontsize=9, frameon=False)
+                self.ax.legend(loc="upper right", bbox_to_anchor=(
+                    1.25, 1.1), fontsize=9, frameon=False)
             if fixed_range:
                 self.ax.set_rlim(fixed_range[0], fixed_range[1])
             else:
@@ -1695,7 +1695,7 @@ class DashboardDataPlotter(tk.Tk):
             self.ax.grid(True)
             self.ax.legend(loc="upper left", bbox_to_anchor=(
                 1.02, 1.05), fontsize=9, frameon=False)
-            self.ax.set_position([0.02, 0.08, 0.8, 0.8])
+            self.ax.set_position([0.05, 0.03, 0.8, 0.85])
             if fixed_range:
                 self.ax.set_rlim(offset + fixed_range[0],
                                  offset + fixed_range[1])

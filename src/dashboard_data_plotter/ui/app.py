@@ -18,6 +18,7 @@ from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
 from dashboard_data_plotter.utils.log import log_exception, DEFAULT_LOG_PATH
 import os
 import json
+import base64
 from datetime import datetime
 import tempfile
 import tkinter as tk
@@ -29,6 +30,7 @@ import pandas as pd
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib import image as mpimg
 import plotly.graph_objects as go
 import plotly.io as pio
 
@@ -64,6 +66,7 @@ class DashboardDataPlotter(tk.Tk):
 
         # Plot backend
         self.use_plotly_var = tk.BooleanVar(value=False)
+        self.radar_background_var = tk.BooleanVar(value=True)
 
         # Plot range controls
         self.range_low_var = tk.StringVar(value="")
@@ -214,7 +217,15 @@ class DashboardDataPlotter(tk.Tk):
         self.angle_combo.grid(row=1, column=1, sticky="w", padx=(8, 0))
 
         self.close_loop_chk = ttk.Checkbutton(
-            angle_frame, text="Close loop", variable=self.close_loop_var).grid(row=1, column=2, sticky="w")
+            angle_frame, text="Close loop", variable=self.close_loop_var)
+        self.close_loop_chk.grid(row=1, column=2, sticky="w")
+
+        self.radar_background_chk = ttk.Checkbutton(
+            angle_frame,
+            text="Radar background image",
+            variable=self.radar_background_var,
+        )
+        self.radar_background_chk.grid(row=2, column=2, sticky="w")
 
         metric_frame = ttk.Frame(left)
         metric_frame.grid(row=9, column=0, sticky="ew", pady=(6, 2))
@@ -339,7 +350,8 @@ class DashboardDataPlotter(tk.Tk):
         self.baseline_combo.configure(state=state)
 
     def _set_plot_type_controls_state(self):
-        is_bar = (self.plot_type_var.get() or "radar").strip().lower() == "bar"
+        plot_type = (self.plot_type_var.get() or "radar").strip().lower()
+        is_bar = plot_type == "bar"
         try:
             self.angle_combo.configure(
                 state="disabled" if is_bar else "readonly")
@@ -348,6 +360,12 @@ class DashboardDataPlotter(tk.Tk):
         try:
             self.close_loop_chk.configure(
                 state="disabled" if is_bar else "normal")
+        except Exception:
+            pass
+        try:
+            self.radar_background_chk.configure(
+                state="normal" if plot_type == "radar" else "disabled"
+            )
         except Exception:
             pass
 
@@ -1117,6 +1135,7 @@ class DashboardDataPlotter(tk.Tk):
                            compare, baseline_id, baseline_display, fixed_range):
         plotted, errors = 0, []
         fig = go.Figure()
+        bg_applied = self._apply_radar_background_plotly(fig)
 
         if not compare:
             range_values = []
@@ -1147,11 +1166,20 @@ class DashboardDataPlotter(tk.Tk):
                     self._update_range_entries(*range_minmax)
 
             mode_str = "absolute" if value_mode == "absolute" else "% of mean"
+            polar_layout = dict(
+                angularaxis=dict(
+                    direction="clockwise",
+                    rotation=90,
+                    showgrid=True,
+                    showline=True,
+                ),
+                radialaxis=dict(showgrid=True, showline=True),
+            )
+            if bg_applied:
+                polar_layout["bgcolor"] = "rgba(0,0,0,0)"
             fig.update_layout(
                 title=f"{metric_col} ({mode_str})",
-                polar=dict(
-                    angularaxis=dict(direction="clockwise", rotation=90),
-                ),
+                polar=polar_layout,
                 showlegend=True,
             )
             if fixed_range:
@@ -1241,16 +1269,29 @@ class DashboardDataPlotter(tk.Tk):
             tick_positions = tick_vals + offset
 
             mode_str = "absolute" if value_mode == "absolute" else "% of mean"
-            radialaxis = dict(tickvals=tick_positions, ticktext=tick_text)
+            radialaxis = dict(
+                tickvals=tick_positions,
+                ticktext=tick_text,
+                showgrid=True,
+                showline=True,
+            )
             if fixed_range:
                 radialaxis["range"] = [offset + fixed_range[0],
                                        offset + fixed_range[1]]
+            polar_layout = dict(
+                angularaxis=dict(
+                    direction="clockwise",
+                    rotation=90,
+                    showgrid=True,
+                    showline=True,
+                ),
+                radialaxis=radialaxis,
+            )
+            if bg_applied:
+                polar_layout["bgcolor"] = "rgba(0,0,0,0)"
             fig.update_layout(
                 title=f"{metric_col} ({mode_str}) difference to Baseline ({b_label})",
-                polar=dict(
-                    angularaxis=dict(direction="clockwise", rotation=90),
-                    radialaxis=radialaxis,
-                ),
+                polar=polar_layout,
                 showlegend=True,
             )
 
@@ -1534,6 +1575,7 @@ class DashboardDataPlotter(tk.Tk):
         self.ax.clear()
         self.ax.set_theta_zero_location("N")
         self.ax.set_theta_direction(-1)
+        self._apply_radar_background_matplotlib(self.ax)
 
         plotted, errors = 0, []
 
@@ -1668,6 +1710,75 @@ class DashboardDataPlotter(tk.Tk):
                 "Partial plot", msg + "\n\n" + "\n".join(errors))
         self.status.set(msg)
         self._push_history()
+
+    def _radar_background_image_path(self):
+        base_dir = os.path.normpath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "..",
+                "assets",
+            )
+        )
+        candidates = (
+            os.path.join(base_dir, "radar_background.png"),
+            os.path.join(base_dir, "radar_background.jpg"),
+            os.path.join(base_dir, "radar_background.jpeg"),
+        )
+        for path in candidates:
+            if os.path.isfile(path):
+                return path
+        return candidates[0]
+
+    def _apply_radar_background_plotly(self, fig):
+        if not self.radar_background_var.get():
+            return False
+        image_path = self._radar_background_image_path()
+        if not os.path.isfile(image_path):
+            return False
+        try:
+            with open(image_path, "rb") as handle:
+                encoded = base64.b64encode(handle.read()).decode("ascii")
+        except OSError:
+            return False
+
+        fig.add_layout_image(
+            dict(
+                source=f"data:image/png;base64,{encoded}",
+                xref="paper",
+                yref="paper",
+                x=0.5,
+                y=0.5,
+                sizex=0.9,
+                sizey=0.9,
+                sizing="stretch",
+                xanchor="center",
+                yanchor="middle",
+                layer="below",
+                opacity=0.6,
+            )
+        )
+        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)")
+        return True
+
+    def _apply_radar_background_matplotlib(self, ax):
+        if not self.radar_background_var.get():
+            return
+        image_path = self._radar_background_image_path()
+        if not os.path.isfile(image_path):
+            return
+        try:
+            image = mpimg.imread(image_path)
+        except Exception:
+            return
+        ax.set_facecolor("none")
+        ax.patch.set_alpha(0.0)
+        ax.imshow(
+            image,
+            extent=[0, 1, 0, 1],
+            transform=ax.transAxes,
+            zorder=0,
+            aspect="auto",
+        )
 
 
 def main():

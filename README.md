@@ -59,6 +59,14 @@ but the app is tolerant of missing or sparse data.
   - % of dataset mean
   - Comparison vs baseline (difference ring)
 
+### Cartesian (0–360°) plot
+- Metric value vs crank angle on Cartesian axes
+- Uses the same 52-bin angular aggregation as radar plots
+- Supports:
+  - Absolute metric values
+  - % of dataset mean
+  - Comparison vs baseline (signed delta on y, with a zero reference line)
+
 ### Bar plot
 - One bar per dataset
 - Represents **mean metric value per dataset**
@@ -77,6 +85,9 @@ When comparison mode is enabled:
 - Radar plots:
   - Baseline drawn as a **zero reference ring**
   - Other datasets plotted as angular differences
+- Cartesian plots:
+  - Baseline provides the interpolation reference
+  - Other datasets plotted as signed angular deltas with a y=0 reference line
 - Bar plots:
   - Baseline bar fixed at **0**
   - Other bars show ± difference relative to baseline

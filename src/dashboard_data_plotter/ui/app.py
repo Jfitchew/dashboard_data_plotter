@@ -60,7 +60,7 @@ class DashboardDataPlotter(tk.Tk):
         self.value_mode_var = tk.StringVar(value="absolute")
 
         # Plot type
-        self.plot_type_var = tk.StringVar(value="radar")  # "radar" or "bar"
+        self.plot_type_var = tk.StringVar(value="radar")  # "radar", "cartesian", or "bar"
 
         # Plot backend
         self.use_plotly_var = tk.BooleanVar(value=False)
@@ -189,13 +189,15 @@ class DashboardDataPlotter(tk.Tk):
         angle_frame = ttk.Frame(left)
         angle_frame.grid(row=8, column=0, sticky="ew", pady=(6, 2))
 
-        # Plot type (radar vs bar)
+        # Plot type (radar/cartesian/bar)
         ttk.Label(angle_frame, text="Plot type:").grid(
             row=0, column=0, sticky="w")
         pt = ttk.Frame(angle_frame)
         pt.grid(row=0, column=1, sticky="w", padx=(8, 0))
         ttk.Radiobutton(pt, text="Radar (polar)", variable=self.plot_type_var, value="radar",
                         command=self._on_plot_type_change).grid(row=0, column=0, sticky="w")
+        ttk.Radiobutton(pt, text="Cartesian (0–360°)", variable=self.plot_type_var, value="cartesian",
+                        command=self._on_plot_type_change).grid(row=0, column=1, sticky="w", padx=(8, 0))
         ttk.Radiobutton(pt, text="Bar (avg)", variable=self.plot_type_var, value="bar",
                         command=self._on_plot_type_change).grid(row=1, column=0, sticky="w")
         ttk.Checkbutton(angle_frame, text="Interactive (Plotly)",
@@ -405,7 +407,7 @@ class DashboardDataPlotter(tk.Tk):
         if not self.metric_var.get().strip():
             return False
         plot_type = (self.plot_type_var.get() or "radar").strip().lower()
-        if plot_type == "radar" and not self.angle_var.get().strip():
+        if plot_type in ("radar", "cartesian") and not self.angle_var.get().strip():
             return False
         if self.compare_var.get():
             baseline_display = self.baseline_display_var.get().strip()
@@ -999,6 +1001,118 @@ class DashboardDataPlotter(tk.Tk):
             messagebox.showwarning(
                 "Partial plot", f"Plotted {len(labels)} bar(s) with errors.\n\n" + "\n".join(errors))
 
+    def _plot_plotly_cartesian(self, angle_col, metric_col, sentinels, value_mode, close_loop,
+                               compare, baseline_id, baseline_display, fixed_range):
+        plotted, errors = 0, []
+        fig = go.Figure()
+        range_values = []
+
+        if not compare:
+            for sid in self.get_plot_order_source_ids():
+                if not self.show_flag.get(sid, True):
+                    continue
+                label = self.id_to_display.get(sid, os.path.basename(sid))
+                try:
+                    ang_deg, val = prepare_angle_value(
+                        self.loaded[sid], angle_col, metric_col, sentinels)
+                    val2, _ = self._apply_value_mode(val, value_mode)
+                    m = np.isfinite(ang_deg) & np.isfinite(val2)
+                    ang_deg2 = ang_deg[m]
+                    val2 = val2[m]
+                    if len(ang_deg2) == 0:
+                        raise ValueError(
+                            "No valid values after filtering.")
+                    if close_loop and len(ang_deg2) > 2:
+                        ang_deg2 = np.concatenate([ang_deg2, [360.0]])
+                        val2 = np.concatenate([val2, [val2[0]]])
+                    fig.add_scatter(
+                        x=ang_deg2, y=val2, mode="lines+markers", name=label, marker=dict(size=4))
+                    range_values.append(val2)
+                    plotted += 1
+                except Exception as e:
+                    errors.append(f"{label}: {e}")
+
+            mode_str = "absolute" if value_mode == "absolute" else "% of mean"
+            title = f"{metric_col} ({mode_str})"
+            y_title = metric_col
+        else:
+            b_label = self.id_to_display.get(
+                baseline_id, os.path.basename(baseline_id))
+            try:
+                b_ang_deg, b_val = prepare_angle_value(
+                    self.loaded[baseline_id], angle_col, metric_col, sentinels)
+                b_val2, _ = self._apply_value_mode(b_val, value_mode)
+            except Exception as e:
+                messagebox.showerror(
+                    "Baseline error", f"Baseline '{b_label}' failed:\n{e}")
+                return
+
+            for sid in self.get_plot_order_source_ids():
+                if not self.show_flag.get(sid, True):
+                    continue
+                if sid == baseline_id:
+                    continue
+                label = self.id_to_display.get(sid, os.path.basename(sid))
+                try:
+                    ang_deg, val = prepare_angle_value(
+                        self.loaded[sid], angle_col, metric_col, sentinels)
+                    val2, _ = self._apply_value_mode(val, value_mode)
+                    base_at = circular_interp_baseline(
+                        b_ang_deg, b_val2, ang_deg)
+                    delta = val2 - base_at
+                    m = np.isfinite(delta) & np.isfinite(ang_deg)
+                    ang_deg2 = ang_deg[m]
+                    delta2 = delta[m]
+                    if len(ang_deg2) == 0:
+                        raise ValueError(
+                            "No valid comparison values after filtering.")
+                    order = np.argsort(ang_deg2)
+                    ang_deg2 = ang_deg2[order]
+                    delta2 = delta2[order]
+                    if close_loop and len(ang_deg2) > 2:
+                        ang_deg2 = np.concatenate([ang_deg2, [360.0]])
+                        delta2 = np.concatenate([delta2, [delta2[0]]])
+                    fig.add_scatter(
+                        x=ang_deg2, y=delta2, mode="lines+markers", name=label, marker=dict(size=4))
+                    range_values.append(delta2)
+                    plotted += 1
+                except Exception as e:
+                    errors.append(f"{label}: {e}")
+
+            mode_str = "absolute" if value_mode == "absolute" else "% of mean"
+            title = f"{metric_col} ({mode_str}) difference to Baseline ({b_label})"
+            y_title = "Difference vs baseline"
+
+        if plotted == 0:
+            messagebox.showinfo(
+                "Nothing to plot", "No datasets produced valid cartesian values.")
+            return
+
+        if range_values:
+            range_minmax = self._minmax_from_values(
+                np.concatenate(range_values))
+            if range_minmax:
+                self._update_range_entries(*range_minmax)
+
+        fig.add_shape(
+            type="line", x0=0, x1=360, y0=0, y1=0,
+            line=dict(color="red" if compare else "black", width=1.2))
+
+        fig.update_layout(
+            title=title,
+            xaxis_title="Crank angle (deg)",
+            yaxis_title=y_title,
+            xaxis=dict(range=[0, 360]),
+            showlegend=True,
+        )
+        if fixed_range:
+            fig.update_yaxes(range=[fixed_range[0], fixed_range[1]])
+
+        self._open_plotly_figure(fig, f"Plotted {plotted} trace(s).")
+        if errors:
+            messagebox.showwarning(
+                "Partial plot", f"Plotted {plotted} trace(s) with errors.\n\n" + "\n".join(errors))
+
     def _plot_plotly_radar(self, angle_col, metric_col, sentinels, value_mode, close_loop,
                            compare, baseline_id, baseline_display, fixed_range):
         plotted, errors = 0, []
@@ -1192,7 +1306,13 @@ class DashboardDataPlotter(tk.Tk):
                 return
             if not angle_col:
                 messagebox.showinfo(
-                    "Missing selection", "Select an angle column (required for Radar plot).")
+                    "Missing selection", "Select an angle column (required for Radar/Cartesian plots).")
+                return
+            if plot_type == "cartesian":
+                self._plot_plotly_cartesian(
+                    angle_col, metric_col, sentinels, value_mode, close_loop,
+                    compare, baseline_id, baseline_display, fixed_range)
+                self._push_history()
                 return
             self._plot_plotly_radar(
                 angle_col, metric_col, sentinels, value_mode, close_loop,
@@ -1267,6 +1387,132 @@ class DashboardDataPlotter(tk.Tk):
             self.canvas.draw_idle()
 
             msg = f"Plotted {len(labels)} bar(s)."
+            if errors:
+                msg += " Some datasets failed (details shown)."
+                messagebox.showwarning(
+                    "Partial plot", msg + "\n\n" + "\n".join(errors))
+            self.status.set(msg)
+            self._push_history()
+            return
+
+        # ---- CARTESIAN PLOT ----
+        if plot_type == "cartesian":
+            if not angle_col:
+                messagebox.showinfo(
+                    "Missing selection", "Select an angle column (required for Cartesian plot).")
+                return
+
+            self.fig.clf()
+            self.ax = self.fig.add_subplot(111)
+            self.ax.clear()
+
+            plotted, errors = 0, []
+            range_values = []
+
+            if not compare:
+                for sid in self.get_plot_order_source_ids():
+                    if not self.show_flag.get(sid, True):
+                        continue
+                    label = self.id_to_display.get(sid, os.path.basename(sid))
+                    try:
+                        ang_deg, val = prepare_angle_value(
+                            self.loaded[sid], angle_col, metric_col, sentinels)
+                        val2, _ = self._apply_value_mode(val, value_mode)
+                        m = np.isfinite(ang_deg) & np.isfinite(val2)
+                        ang_deg2 = ang_deg[m]
+                        val2 = val2[m]
+                        if len(ang_deg2) == 0:
+                            raise ValueError(
+                                "No valid values after filtering.")
+                        if close_loop and len(ang_deg2) > 2:
+                            ang_deg2 = np.concatenate([ang_deg2, [360.0]])
+                            val2 = np.concatenate([val2, [val2[0]]])
+                        self.ax.plot(ang_deg2, val2, marker="o",
+                                     markersize=3, linewidth=1.5, label=label)
+                        range_values.append(val2)
+                        plotted += 1
+                    except Exception as e:
+                        errors.append(f"{label}: {e}")
+
+                mode_str = "absolute" if value_mode == "absolute" else "% of mean"
+                self.ax.set_title(f"{metric_col} ({mode_str})")
+                self.ax.set_ylabel(metric_col)
+            else:
+                b_label = self.id_to_display.get(
+                    baseline_id, os.path.basename(baseline_id))
+                try:
+                    b_ang_deg, b_val = prepare_angle_value(
+                        self.loaded[baseline_id], angle_col, metric_col, sentinels)
+                    b_val2, _ = self._apply_value_mode(b_val, value_mode)
+                except Exception as e:
+                    messagebox.showerror(
+                        "Baseline error", f"Baseline '{b_label}' failed:\n{e}")
+                    return
+
+                for sid in self.get_plot_order_source_ids():
+                    if not self.show_flag.get(sid, True):
+                        continue
+                    if sid == baseline_id:
+                        continue
+                    label = self.id_to_display.get(
+                        sid, os.path.basename(sid))
+                    try:
+                        ang_deg, val = prepare_angle_value(
+                            self.loaded[sid], angle_col, metric_col, sentinels)
+                        val2, _ = self._apply_value_mode(val, value_mode)
+                        base_at = circular_interp_baseline(
+                            b_ang_deg, b_val2, ang_deg)
+                        delta = val2 - base_at
+                        m = np.isfinite(delta) & np.isfinite(ang_deg)
+                        ang_deg2 = ang_deg[m]
+                        delta2 = delta[m]
+                        if len(ang_deg2) == 0:
+                            raise ValueError(
+                                "No valid comparison values after filtering.")
+                        order = np.argsort(ang_deg2)
+                        ang_deg2 = ang_deg2[order]
+                        delta2 = delta2[order]
+                        if close_loop and len(ang_deg2) > 2:
+                            ang_deg2 = np.concatenate([ang_deg2, [360.0]])
+                            delta2 = np.concatenate([delta2, [delta2[0]]])
+                        self.ax.plot(ang_deg2, delta2, marker="o",
+                                     markersize=3, linewidth=1.5, label=label)
+                        range_values.append(delta2)
+                        plotted += 1
+                    except Exception as e:
+                        errors.append(f"{label}: {e}")
+
+                mode_str = "absolute" if value_mode == "absolute" else "% of mean"
+                self.ax.set_title(
+                    f"{metric_col} ({mode_str}) difference to Baseline ({b_label})")
+                self.ax.set_ylabel("Difference vs baseline")
+
+            if plotted == 0:
+                messagebox.showinfo(
+                    "Nothing to plot", "No datasets produced valid cartesian values.")
+                self._redraw_empty()
+                return
+
+            self.ax.axhline(
+                0.0, color="red" if compare else "black", linewidth=1.2)
+            self.ax.set_xlabel("Crank angle (deg)")
+            self.ax.set_xlim(0, 360)
+            if plotted:
+                self.ax.legend(loc="upper left", bbox_to_anchor=(
+                    1.02, 1.05), fontsize=9, frameon=False)
+            if fixed_range:
+                self.ax.set_ylim(fixed_range[0], fixed_range[1])
+            elif range_values:
+                range_minmax = self._minmax_from_values(
+                    np.concatenate(range_values))
+                if range_minmax:
+                    self.ax.set_ylim(range_minmax[0], range_minmax[1])
+            self.ax.grid(True, linestyle=":")
+            low, high = self.ax.get_ylim()
+            self._update_range_entries(low, high)
+            self.canvas.draw_idle()
+
+            msg = f"Plotted {plotted} trace(s)."
             if errors:
                 msg += " Some datasets failed (details shown)."
                 messagebox.showwarning(

@@ -38,6 +38,63 @@ import matplotlib
 matplotlib.use("TkAgg")
 
 
+class ToolTip:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self._tip = None
+        self._after_id = None
+        widget.bind("<Enter>", self._schedule, add=True)
+        widget.bind("<Leave>", self._hide, add=True)
+        widget.bind("<ButtonPress>", self._hide, add=True)
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self._after_id = self.widget.after(600, self._show)
+
+    def _cancel(self):
+        if self._after_id is not None:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+    def _show(self):
+        if self._tip or not self.text:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 12
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 8
+            self._tip = tk.Toplevel(self.widget)
+            self._tip.wm_overrideredirect(True)
+            self._tip.wm_geometry(f"+{x}+{y}")
+            label = tk.Label(
+                self._tip,
+                text=self.text,
+                justify="left",
+                background="#FFFFE0",
+                relief="solid",
+                borderwidth=1,
+                font=("Segoe UI", 9),
+                padx=6,
+                pady=3,
+                wraplength=360,
+            )
+            label.pack()
+        except Exception:
+            self._tip = None
+
+    def _hide(self, _event=None):
+        self._cancel()
+        if self._tip is not None:
+            try:
+                self._tip.destroy()
+            except Exception:
+                pass
+            self._tip = None
+
+
 class DashboardDataPlotter(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -103,16 +160,21 @@ class DashboardDataPlotter(tk.Tk):
 
         btns = ttk.Frame(left)
         btns.grid(row=1, column=0, sticky="ew", pady=(6, 6))
-        ttk.Button(btns, text="Add JSON file(s)...", command=self.add_files).grid(
-            row=0, column=0, sticky="ew")
-        ttk.Button(btns, text="Remove", command=self.remove_selected).grid(
-            row=0, column=1, padx=(6, 0))
-        ttk.Button(btns, text="Rename…", command=self.rename_selected).grid(
-            row=0, column=2, padx=(6, 0))
-        ttk.Button(btns, text="Clear all", command=self.clear_all).grid(
-            row=0, column=3, padx=(6, 0))
-        ttk.Button(btns, text="Save All…", command=self.save_all_datasets).grid(
-            row=0, column=4, padx=(6, 0))
+        self.btn_add_files = ttk.Button(
+            btns, text="Add JSON file(s)...", command=self.add_files)
+        self.btn_add_files.grid(row=0, column=0, sticky="ew")
+        self.btn_remove = ttk.Button(
+            btns, text="Remove", command=self.remove_selected)
+        self.btn_remove.grid(row=0, column=1, padx=(6, 0))
+        self.btn_rename = ttk.Button(
+            btns, text="Rename...", command=self.rename_selected)
+        self.btn_rename.grid(row=0, column=2, padx=(6, 0))
+        self.btn_clear_all = ttk.Button(
+            btns, text="Clear all", command=self.clear_all)
+        self.btn_clear_all.grid(row=0, column=3, padx=(6, 0))
+        self.btn_save_all = ttk.Button(
+            btns, text="Save All...", command=self.save_all_datasets)
+        self.btn_save_all.grid(row=0, column=4, padx=(6, 0))
 
         # Treeview: show checkbox + dataset name
         tv_frame = ttk.Frame(left)
@@ -178,12 +240,15 @@ class DashboardDataPlotter(tk.Tk):
 
         paste_btns = ttk.Frame(left)
         paste_btns.grid(row=5, column=0, sticky="ew", pady=(2, 6))
-        ttk.Button(paste_btns, text="Load pasted JSON",
-                   command=self.load_from_paste).grid(row=0, column=0, sticky="ew")
-        ttk.Button(paste_btns, text="Save pasted JSON…",
-                   command=self.save_pasted_json).grid(row=0, column=1, padx=(6, 0))
-        ttk.Button(paste_btns, text="Clear pasted", command=self.clear_paste).grid(
-            row=0, column=2, padx=(6, 0))
+        self.btn_load_paste = ttk.Button(
+            paste_btns, text="Load pasted JSON", command=self.load_from_paste)
+        self.btn_load_paste.grid(row=0, column=0, sticky="ew")
+        self.btn_save_paste = ttk.Button(
+            paste_btns, text="Save pasted JSON...", command=self.save_pasted_json)
+        self.btn_save_paste.grid(row=0, column=1, padx=(6, 0))
+        self.btn_clear_paste = ttk.Button(
+            paste_btns, text="Clear pasted", command=self.clear_paste)
+        self.btn_clear_paste.grid(row=0, column=2, padx=(6, 0))
 
         ttk.Separator(left).grid(row=6, column=0, sticky="ew", pady=10)
 
@@ -198,15 +263,22 @@ class DashboardDataPlotter(tk.Tk):
             row=0, column=0, sticky="w")
         pt = ttk.Frame(angle_frame)
         pt.grid(row=0, column=1, sticky="w", padx=(8, 0))
-        ttk.Radiobutton(pt, text="Radar (polar)", variable=self.plot_type_var, value="radar",
-                        command=self._on_plot_type_change).grid(row=0, column=0, sticky="w")
-        ttk.Radiobutton(pt, text="Cartesian (0–360°)", variable=self.plot_type_var, value="cartesian",
-                        command=self._on_plot_type_change).grid(row=0, column=1, sticky="w", padx=(8, 0))
-        ttk.Checkbutton(pt, text="Interactive (Plotly)",
-                        variable=self.use_plotly_var).grid(row=0, column=2, sticky="w", padx=(20, 0))
+        self.rb_radar = ttk.Radiobutton(
+            pt, text="Radar (polar)", variable=self.plot_type_var, value="radar",
+            command=self._on_plot_type_change)
+        self.rb_radar.grid(row=0, column=0, sticky="w")
+        self.rb_cartesian = ttk.Radiobutton(
+            pt, text="Cartesian (0-360°)", variable=self.plot_type_var, value="cartesian",
+            command=self._on_plot_type_change)
+        self.rb_cartesian.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        self.chk_plotly = ttk.Checkbutton(
+            pt, text="Interactive (Plotly)", variable=self.use_plotly_var)
+        self.chk_plotly.grid(row=0, column=2, sticky="w", padx=(20, 0))
 
-        ttk.Radiobutton(pt, text="Bar (avg)", variable=self.plot_type_var, value="bar",
-                        command=self._on_plot_type_change).grid(row=1, column=0, sticky="w")
+        self.rb_bar = ttk.Radiobutton(
+            pt, text="Bar (avg)", variable=self.plot_type_var, value="bar",
+            command=self._on_plot_type_change)
+        self.rb_bar.grid(row=1, column=0, sticky="w")
 
         self.radar_background_chk = ttk.Checkbutton(
             pt,
@@ -243,19 +315,23 @@ class DashboardDataPlotter(tk.Tk):
         range_frame.grid(row=10, column=0, sticky="ew", pady=(6, 2))
         ttk.Label(range_frame, text="Range (min, max):").grid(
             row=0, column=0, sticky="w")
-        ttk.Entry(range_frame, textvariable=self.range_low_var,
-                  width=10).grid(row=0, column=1, sticky="w", padx=(8, 4))
-        ttk.Entry(range_frame, textvariable=self.range_high_var,
-                  width=10).grid(row=0, column=2, sticky="w")
-        ttk.Checkbutton(range_frame, text="Fixed",
-                        variable=self.range_fixed_var).grid(row=0, column=3, sticky="w", padx=(8, 0))
+        self.range_low_entry = ttk.Entry(
+            range_frame, textvariable=self.range_low_var, width=10)
+        self.range_low_entry.grid(row=0, column=1, sticky="w", padx=(8, 4))
+        self.range_high_entry = ttk.Entry(
+            range_frame, textvariable=self.range_high_var, width=10)
+        self.range_high_entry.grid(row=0, column=2, sticky="w")
+        self.range_fixed_chk = ttk.Checkbutton(
+            range_frame, text="Fixed", variable=self.range_fixed_var)
+        self.range_fixed_chk.grid(row=0, column=3, sticky="w", padx=(8, 0))
 
         sentinel_frame = ttk.Frame(left)
         sentinel_frame.grid(row=11, column=0, sticky="ew", pady=(6, 2))
         ttk.Label(sentinel_frame, text="Invalid values:").grid(
             row=0, column=0, sticky="w")
-        ttk.Entry(sentinel_frame, textvariable=self.sentinels_var,
-                  width=32).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        self.sentinel_entry = ttk.Entry(
+            sentinel_frame, textvariable=self.sentinels_var, width=32)
+        self.sentinel_entry.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
         ttk.Separator(left).grid(row=12, column=0, sticky="ew", pady=10)
 
@@ -265,8 +341,10 @@ class DashboardDataPlotter(tk.Tk):
 
         vm_frame = ttk.Frame(left)
         vm_frame.grid(row=14, column=0, sticky="ew", pady=(6, 2))
-        ttk.Radiobutton(vm_frame, text="Absolute metric values", variable=self.value_mode_var,
-                        value="absolute").grid(row=0, column=0, sticky="w")
+        self.rb_absolute = ttk.Radiobutton(
+            vm_frame, text="Absolute metric values", variable=self.value_mode_var,
+            value="absolute")
+        self.rb_absolute.grid(row=0, column=0, sticky="w")
         self.rb_percent_mean = ttk.Radiobutton(
             vm_frame, text="% of dataset mean", variable=self.value_mode_var, value="percent_mean")
         self.rb_percent_mean.grid(row=0, column=1, sticky="w", padx=(20, 0))
@@ -277,11 +355,13 @@ class DashboardDataPlotter(tk.Tk):
         ttk.Label(left, text="Comparison mode", font=(
             "Segoe UI", 11, "bold")).grid(row=16, column=0, sticky="w")
 
-        ttk.Checkbutton(left, text="Plot as difference vs Baseline:", variable=self.compare_var,
-                        command=self._on_compare_toggle).grid(row=17, column=0, sticky="w", pady=(6, 2))
+        self.chk_compare = ttk.Checkbutton(
+            left, text="Plot as difference vs Baseline:", variable=self.compare_var,
+            command=self._on_compare_toggle)
+        self.chk_compare.grid(row=17, column=0, sticky="w", pady=(6, 2))
 
         base_frame = ttk.Frame(left)
-        base_frame.grid(row=17, column=0, sticky="e", padx=(0, 50))
+        base_frame.grid(row=17, column=0, sticky="e", padx=(0, 65))
         self.baseline_combo = ttk.Combobox(base_frame, textvariable=self.baseline_display_var,
                                            values=[], state="readonly", width=30)
         self.baseline_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
@@ -291,10 +371,10 @@ class DashboardDataPlotter(tk.Tk):
         plot_btns = ttk.Frame(left)
         plot_btns.grid(row=19, column=0, sticky="ew", pady=(10, 0))
         plot_btns.columnconfigure(0, weight=1)
-        plot_btn = ttk.Button(
+        self.plot_btn = ttk.Button(
             plot_btns, text="Plot / Refresh", command=self.plot)
-        plot_btn.grid(row=0, column=0, sticky="ew")
-        plot_btn.configure(style="Red.TButton")
+        self.plot_btn.grid(row=0, column=0, sticky="ew")
+        self.plot_btn.configure(style="Red.TButton")
         self.prev_btn = ttk.Button(
             plot_btns, text="Prev", command=self._plot_prev, state="disabled", width=5)
         self.prev_btn.grid(row=0, column=1, padx=(10, 0))
@@ -315,6 +395,7 @@ class DashboardDataPlotter(tk.Tk):
 
         self._on_plot_type_change()
         self._set_compare_controls_state()
+        self._add_tooltips()
 
     def _build_plot(self):
         right = ttk.Frame(self, padding=10)
@@ -338,6 +419,49 @@ class DashboardDataPlotter(tk.Tk):
         toolbar.grid(row=2, column=0, sticky="ew", pady=(6, 0))
 
         self._redraw_empty()
+
+    def _add_tooltips(self):
+        tips = [
+            (self.btn_add_files, "Load one or more JSON datasets from file."),
+            (self.btn_remove, "Remove the selected dataset(s) from the list."),
+            (self.btn_rename, "Rename the selected dataset."),
+            (self.btn_clear_all, "Remove all loaded datasets."),
+            (self.btn_save_all, "Save all datasets to a single JSON file in current order."),
+            (self.files_tree, "Datasets in plot order. Click 'Show' to toggle visibility."),
+            (self.paste_text,
+             "Paste a JSON dataset object or a multi-dataset JSON blob here."),
+            (self.btn_load_paste, "Load datasets from the pasted JSON."),
+            (self.btn_save_paste, "Save the pasted JSON to a file."),
+            (self.btn_clear_paste, "Clear the pasted JSON text."),
+            (self.rb_radar, "Radar (polar) plot using crank angle."),
+            (self.rb_cartesian, "Cartesian plot of metric vs crank angle (0-360°)."),
+            (self.rb_bar, "Bar plot of mean metric per dataset."),
+            (self.chk_plotly, "Open an interactive Plotly plot in your browser."),
+            (self.radar_background_chk,
+             "Toggle background image/bands\nfor radar/cartesian plots."),
+            (self.angle_combo, "Crank angle column used for radar/cartesian plots."),
+            (self.close_loop_chk,
+             "Close loop by repeating the first point at 360°."),
+            (self.metric_combo, "Metric column to plot."),
+            (self.range_low_entry, "Lower y-range bound (used when Fixed is on)."),
+            (self.range_high_entry, "Upper y-range bound (used when Fixed is on)."),
+            (self.range_fixed_chk,
+             "Lock the y-range to the chosen values\n(easier to compare different plots)."),
+            (self.sentinel_entry,
+             "Comma-separated invalid/sentinel values to ignore."),
+            (self.rb_absolute, "Plot absolute metric values."),
+            (self.rb_percent_mean,
+             "Plot values as percent of dataset mean (radar/cartesian only)."),
+            (self.chk_compare,
+             "Plot each dataset as a difference from the selected baseline."),
+            (self.baseline_combo, "Choose the baseline dataset for comparison mode."),
+            (self.plot_btn, "Plot or refresh using current settings."),
+            (self.prev_btn, "Go to the previous plot in history."),
+            (self.delete_btn, "Remove the current plot from history."),
+            (self.next_btn, "Go to the next plot in history."),
+        ]
+        for widget, text in tips:
+            ToolTip(widget, text)
 
     def _redraw_empty(self):
         self.ax.clear()

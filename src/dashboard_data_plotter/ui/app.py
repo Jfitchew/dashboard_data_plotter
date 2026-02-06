@@ -1181,6 +1181,10 @@ class DashboardDataPlotter(tk.Tk):
             )
             if bg_applied:
                 polar_layout["bgcolor"] = "rgba(0,0,0,0)"
+                polar_layout["angularaxis"]["gridcolor"] = "#A5A5A5"
+                polar_layout["angularaxis"]["linecolor"] = "#A5A5A5"
+                polar_layout["radialaxis"]["gridcolor"] = "#A5A5A5"
+                polar_layout["radialaxis"]["linecolor"] = "#797979"
             fig.update_layout(
                 title=f"{metric_col} ({mode_str})",
                 polar=polar_layout,
@@ -1293,6 +1297,10 @@ class DashboardDataPlotter(tk.Tk):
             )
             if bg_applied:
                 polar_layout["bgcolor"] = "rgba(0,0,0,0)"
+                polar_layout["angularaxis"]["gridcolor"] = "#A5A5A5"
+                polar_layout["angularaxis"]["linecolor"] = "#A5A5A5"
+                polar_layout["radialaxis"]["gridcolor"] = "#A5A5A5"
+                polar_layout["radialaxis"]["linecolor"] = "#797979"
             fig.update_layout(
                 title=f"{metric_col} ({mode_str}) difference to Baseline ({b_label})",
                 polar=polar_layout,
@@ -1754,7 +1762,7 @@ class DashboardDataPlotter(tk.Tk):
                 y=0.5,
                 sizex=0.9,
                 sizey=0.9,
-                sizing="stretch",
+                sizing="contain",
                 xanchor="center",
                 yanchor="middle",
                 layer="below",

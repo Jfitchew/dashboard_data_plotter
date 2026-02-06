@@ -62,7 +62,8 @@ class DashboardDataPlotter(tk.Tk):
         self.value_mode_var = tk.StringVar(value="absolute")
 
         # Plot type
-        self.plot_type_var = tk.StringVar(value="radar")  # "radar", "cartesian", or "bar"
+        # "radar", "cartesian", or "bar"
+        self.plot_type_var = tk.StringVar(value="radar")
 
         # Plot backend
         self.use_plotly_var = tk.BooleanVar(value=False)
@@ -201,10 +202,20 @@ class DashboardDataPlotter(tk.Tk):
                         command=self._on_plot_type_change).grid(row=0, column=0, sticky="w")
         ttk.Radiobutton(pt, text="Cartesian (0–360°)", variable=self.plot_type_var, value="cartesian",
                         command=self._on_plot_type_change).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Checkbutton(pt, text="Interactive (Plotly)",
+                        variable=self.use_plotly_var).grid(row=0, column=2, sticky="w", padx=(20, 0))
+
         ttk.Radiobutton(pt, text="Bar (avg)", variable=self.plot_type_var, value="bar",
                         command=self._on_plot_type_change).grid(row=1, column=0, sticky="w")
-        ttk.Checkbutton(angle_frame, text="Interactive (Plotly)",
-                        variable=self.use_plotly_var).grid(row=0, column=2, sticky="w")
+
+        self.radar_background_chk = ttk.Checkbutton(
+            pt,
+            text="Background image",
+            variable=self.radar_background_var,
+        )
+        self.radar_background_chk.grid(
+            row=1, column=2, sticky="w", padx=(20, 0))
+
         ttk.Label(angle_frame, text="Angle column:").grid(
             row=1, column=0, sticky="w")
         self.angle_combo = ttk.Combobox(
@@ -218,14 +229,7 @@ class DashboardDataPlotter(tk.Tk):
 
         self.close_loop_chk = ttk.Checkbutton(
             angle_frame, text="Close loop", variable=self.close_loop_var)
-        self.close_loop_chk.grid(row=1, column=2, sticky="w")
-
-        self.radar_background_chk = ttk.Checkbutton(
-            angle_frame,
-            text="Radar background image",
-            variable=self.radar_background_var,
-        )
-        self.radar_background_chk.grid(row=2, column=2, sticky="w")
+        self.close_loop_chk.grid(row=1, column=1, sticky="e", padx=(0, 70))
 
         metric_frame = ttk.Frame(left)
         metric_frame.grid(row=9, column=0, sticky="ew", pady=(6, 2))

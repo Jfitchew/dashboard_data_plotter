@@ -17,6 +17,7 @@ from dashboard_data_plotter.data.loaders import (
 from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
 from dashboard_data_plotter.utils.log import log_exception, DEFAULT_LOG_PATH
 import os
+import sys
 import json
 import base64
 from datetime import datetime
@@ -1851,13 +1852,7 @@ class DashboardDataPlotter(tk.Tk):
         self._push_history()
 
     def _radar_background_image_path(self):
-        base_dir = os.path.normpath(
-            os.path.join(
-                os.path.dirname(__file__),
-                "..",
-                "assets",
-            )
-        )
+        base_dir = self._assets_dir()
         candidates = (
             os.path.join(base_dir, "radar_background.png"),
             os.path.join(base_dir, "radar_background.jpg"),
@@ -1869,14 +1864,19 @@ class DashboardDataPlotter(tk.Tk):
         return candidates[0]
 
     def _cartesian_background_image_path(self):
-        base_dir = os.path.normpath(
+        base_dir = self._assets_dir()
+        return os.path.join(base_dir, "leg_muscles.jpeg")
+
+    def _assets_dir(self):
+        if getattr(sys, "_MEIPASS", None):
+            return os.path.join(sys._MEIPASS, "dashboard_data_plotter", "assets")
+        return os.path.normpath(
             os.path.join(
                 os.path.dirname(__file__),
                 "..",
                 "assets",
             )
         )
-        return os.path.join(base_dir, "leg_muscles.jpeg")
 
     def _apply_radar_background_plotly(self, fig):
         if not self.radar_background_var.get():

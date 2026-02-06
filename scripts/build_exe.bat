@@ -19,8 +19,8 @@ if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 if exist DashboardDataPlotter.spec del /q DashboardDataPlotter.spec
 
-REM Build one-file windowed exe
-pyinstaller --clean --noconfirm --windowed --onefile --name DashboardDataPlotter --paths src main.py
+REM Build one-file windowed exe (include assets)
+pyinstaller --clean --noconfirm --windowed --onefile --name DashboardDataPlotter --paths src --add-data "src\dashboard_data_plotter\assets;dashboard_data_plotter\assets" main.py
 
 
 echo.

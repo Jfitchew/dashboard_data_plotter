@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=['src'],
     binaries=[],
-    datas=[],
+    datas=[('src\\dashboard_data_plotter\\assets', 'dashboard_data_plotter\\assets')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

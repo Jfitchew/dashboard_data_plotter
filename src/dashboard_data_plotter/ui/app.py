@@ -16,6 +16,7 @@ from dashboard_data_plotter.data.loaders import (
     prepare_angle_value_agg,
     aggregate_metric,
     sanitize_numeric,
+    wrap_angle_deg,
 )
 from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
 from dashboard_data_plotter.utils.log import log_exception, DEFAULT_LOG_PATH
@@ -498,7 +499,7 @@ class DashboardDataPlotter(tk.Tk):
             (self.agg_combo,
              "Average type depends on plot:\n"
              "Radar/Cartesian: mean, median, 10% trimmed mean.\n"
-             "Time series: raw or pedal stroke (avg by left pedal angle)."),
+             "Time series: raw, per pedal stroke, or roll 360deg."),
             (self.range_low_entry, "Lower y-range bound (used when Fixed is on)."),
             (self.range_high_entry, "Upper y-range bound (used when Fixed is on)."),
             (self.range_fixed_chk,
@@ -601,11 +602,13 @@ class DashboardDataPlotter(tk.Tk):
         is_bar = (plot_type == "bar")
         if hasattr(self, "agg_combo"):
             if plot_type == "timeseries":
-                self.agg_combo["values"] = ["raw", "pedal stroke"]
+                self.agg_combo["values"] = [
+                    "raw", "per pedal stroke", "rolling 360deg"]
                 if self.agg_var.get() not in self.agg_combo["values"]:
                     self.agg_var.set("raw")
             else:
-                self.agg_combo["values"] = ["mean", "median", "10% trimmed mean"]
+                self.agg_combo["values"] = [
+                    "mean", "median", "10% trimmed mean"]
                 if self.agg_var.get() not in self.agg_combo["values"]:
                     self.agg_var.set("median")
         if hasattr(self, "rb_percent_mean"):
@@ -639,11 +642,81 @@ class DashboardDataPlotter(tk.Tk):
             return "raw"
         if raw in ("pedal stroke", "pedal_stroke"):
             return "pedal_stroke"
+        if raw in ("roll 360deg", "roll_360deg"):
+            return "roll_360deg"
         if raw in ("10% trimmed mean", "trimmed mean", "trimmed_mean_10"):
             return "trimmed_mean_10"
         if raw == "median":
             return "median"
         return "mean"
+
+    def _pedal_stroke_series(self, df: pd.DataFrame, metric_col: str, sentinels):
+        if "leftPedalCrankAngle" not in df.columns:
+            raise KeyError("Angle column 'leftPedalCrankAngle' not found.")
+        ang = wrap_angle_deg(
+            sanitize_numeric(df["leftPedalCrankAngle"], sentinels),
+            convert_br_to_standard=True,
+        ).to_numpy(dtype=float)
+        val = sanitize_numeric(df[metric_col], sentinels).to_numpy(dtype=float)
+        mask = np.isfinite(ang) & np.isfinite(val)
+        ang = ang[mask]
+        val = val[mask]
+        if ang.size == 0:
+            raise ValueError("No valid values after filtering.")
+
+        stroke_means = []
+        stroke_vals = []
+        prev = ang[0]
+        for a, v in zip(ang, val):
+            # Detect wrap from high angle back to low angle.
+            if prev - a > 180.0:
+                if stroke_vals:
+                    stroke_means.append(float(np.nanmean(stroke_vals)))
+                stroke_vals = []
+            stroke_vals.append(v)
+            prev = a
+        if stroke_vals:
+            stroke_means.append(float(np.nanmean(stroke_vals)))
+
+        if not stroke_means:
+            raise ValueError("No valid pedal strokes after filtering.")
+        x = np.arange(len(stroke_means), dtype=float)
+        y = np.asarray(stroke_means, dtype=float)
+        return x, y
+
+    def _roll_360_series(self, df: pd.DataFrame, metric_col: str, sentinels):
+        if "leftPedalCrankAngle" not in df.columns:
+            raise KeyError("Angle column 'leftPedalCrankAngle' not found.")
+        ang = wrap_angle_deg(
+            sanitize_numeric(df["leftPedalCrankAngle"], sentinels),
+            convert_br_to_standard=True,
+        ).to_numpy(dtype=float)
+        val = sanitize_numeric(df[metric_col], sentinels).to_numpy(dtype=float)
+        mask = np.isfinite(ang) & np.isfinite(val)
+        ang = ang[mask]
+        val = val[mask]
+        if ang.size == 0:
+            raise ValueError("No valid values after filtering.")
+
+        out = np.empty_like(val, dtype=float)
+        n = len(val)
+        for i in range(n):
+            start_ang = ang[i]
+            j = i + 1
+            wrapped = False
+            prev = ang[i]
+            while j < n:
+                a = ang[j]
+                if prev - a > 180.0:
+                    wrapped = True
+                if wrapped and a >= start_ang:
+                    break
+                prev = a
+                j += 1
+            window = val[i:j + 1] if j < n else val[i:n]
+            out[i] = float(np.nanmean(window))
+        x = np.arange(len(out), dtype=float)
+        return x, out
 
     def _snapshot_settings(self):
         return {
@@ -713,6 +786,8 @@ class DashboardDataPlotter(tk.Tk):
             display_agg = "10% trimmed mean"
         elif norm_agg == "pedal_stroke":
             display_agg = "pedal stroke"
+        elif norm_agg == "roll_360deg":
+            display_agg = "roll 360deg"
         else:
             display_agg = norm_agg
         self.agg_var.set(display_agg)
@@ -1282,17 +1357,26 @@ class DashboardDataPlotter(tk.Tk):
 
         b_label = None
         b_val2 = None
-        b_ang_deg = None
+        b_strokes = None
+        b_roll = None
         if compare:
             b_label = self.id_to_display.get(
                 baseline_id, os.path.basename(baseline_id))
             if agg_mode == "pedal_stroke":
-                b_ang_deg, b_val = prepare_angle_value_agg(
-                    self.loaded[baseline_id], "leftPedalCrankAngle", metric_col, sentinels, "mean")
-                b_val2, _ = self._apply_value_mode(b_val, value_mode)
+                _, b_vals = self._pedal_stroke_series(
+                    self.loaded[baseline_id], metric_col, sentinels)
+                b_val2, _ = self._apply_value_mode(b_vals, value_mode)
+                b_strokes = b_val2
+            elif agg_mode == "roll_360deg":
+                _, b_vals = self._roll_360_series(
+                    self.loaded[baseline_id], metric_col, sentinels)
+                b_val2, _ = self._apply_value_mode(b_vals, value_mode)
+                b_roll = b_val2
             else:
-                b_vals = sanitize_numeric(self.loaded[baseline_id][metric_col], sentinels)
-                b_val2, _ = self._apply_value_mode(b_vals.to_numpy(dtype=float), value_mode)
+                b_vals = sanitize_numeric(
+                    self.loaded[baseline_id][metric_col], sentinels)
+                b_val2, _ = self._apply_value_mode(
+                    b_vals.to_numpy(dtype=float), value_mode)
 
         for sid in self.get_plot_order_source_ids():
             if not self.show_flag.get(sid, True):
@@ -1302,24 +1386,45 @@ class DashboardDataPlotter(tk.Tk):
             label = self.id_to_display.get(sid, os.path.basename(sid))
             try:
                 if agg_mode == "pedal_stroke":
-                    ang_deg, val = prepare_angle_value_agg(
-                        self.loaded[sid], "leftPedalCrankAngle", metric_col, sentinels, "mean")
-                    val2, _ = self._apply_value_mode(val, value_mode)
+                    t, vals = self._pedal_stroke_series(
+                        self.loaded[sid], metric_col, sentinels)
+                    val2, _ = self._apply_value_mode(vals, value_mode)
                     if compare:
-                        if b_ang_deg is None or b_val2 is None:
+                        if b_strokes is None:
                             raise ValueError("Baseline data missing.")
-                        base_at = circular_interp_baseline(b_ang_deg, b_val2, ang_deg)
-                        y = val2 - base_at
+                        min_len = min(len(val2), len(b_strokes))
+                        if min_len == 0:
+                            raise ValueError(
+                                "No valid values after filtering.")
+                        y = val2[:min_len] - b_strokes[:min_len]
+                        t = t[:min_len]
                     else:
                         y = val2
-                    t = ang_deg
+                elif agg_mode == "roll_360deg":
+                    t, vals = self._roll_360_series(
+                        self.loaded[sid], metric_col, sentinels)
+                    val2, _ = self._apply_value_mode(vals, value_mode)
+                    if compare:
+                        if b_roll is None:
+                            raise ValueError("Baseline data missing.")
+                        min_len = min(len(val2), len(b_roll))
+                        if min_len == 0:
+                            raise ValueError(
+                                "No valid values after filtering.")
+                        y = val2[:min_len] - b_roll[:min_len]
+                        t = t[:min_len]
+                    else:
+                        y = val2
                 else:
-                    vals = sanitize_numeric(self.loaded[sid][metric_col], sentinels)
-                    val2, _ = self._apply_value_mode(vals.to_numpy(dtype=float), value_mode)
+                    vals = sanitize_numeric(
+                        self.loaded[sid][metric_col], sentinels)
+                    val2, _ = self._apply_value_mode(
+                        vals.to_numpy(dtype=float), value_mode)
                     if compare:
                         min_len = min(len(val2), len(b_val2))
                         if min_len == 0:
-                            raise ValueError("No valid values after filtering.")
+                            raise ValueError(
+                                "No valid values after filtering.")
                         delta = val2[:min_len] - b_val2[:min_len]
                         t = np.arange(min_len, dtype=float) / 100.0
                         y = delta
@@ -1350,7 +1455,10 @@ class DashboardDataPlotter(tk.Tk):
         mode_str = "absolute" if value_mode == "absolute" else "% of mean"
         if agg_mode == "pedal_stroke":
             base_title = f"Pedal stroke {metric_col} ({mode_str})"
-            x_title = "Crank angle (deg)"
+            x_title = "Pedal stroke #"
+        elif agg_mode == "roll_360deg":
+            base_title = f"Roll 360deg {metric_col} ({mode_str})"
+            x_title = "Record #"
         else:
             base_title = f"Time series {metric_col} ({mode_str})"
             x_title = "Time (s)"
@@ -1790,17 +1898,26 @@ class DashboardDataPlotter(tk.Tk):
 
             b_label = None
             b_val2 = None
-            b_ang_deg = None
+            b_strokes = None
+            b_roll = None
             if compare:
                 b_label = self.id_to_display.get(
                     baseline_id, os.path.basename(baseline_id))
                 if agg_mode == "pedal_stroke":
-                    b_ang_deg, b_val = prepare_angle_value_agg(
-                        self.loaded[baseline_id], "leftPedalCrankAngle", metric_col, sentinels, "mean")
-                    b_val2, _ = self._apply_value_mode(b_val, value_mode)
+                    _, b_vals = self._pedal_stroke_series(
+                        self.loaded[baseline_id], metric_col, sentinels)
+                    b_val2, _ = self._apply_value_mode(b_vals, value_mode)
+                    b_strokes = b_val2
+                elif agg_mode == "roll_360deg":
+                    _, b_vals = self._roll_360_series(
+                        self.loaded[baseline_id], metric_col, sentinels)
+                    b_val2, _ = self._apply_value_mode(b_vals, value_mode)
+                    b_roll = b_val2
                 else:
-                    b_vals = sanitize_numeric(self.loaded[baseline_id][metric_col], sentinels)
-                    b_val2, _ = self._apply_value_mode(b_vals.to_numpy(dtype=float), value_mode)
+                    b_vals = sanitize_numeric(
+                        self.loaded[baseline_id][metric_col], sentinels)
+                    b_val2, _ = self._apply_value_mode(
+                        b_vals.to_numpy(dtype=float), value_mode)
 
             for sid in self.get_plot_order_source_ids():
                 if not self.show_flag.get(sid, True):
@@ -1810,24 +1927,45 @@ class DashboardDataPlotter(tk.Tk):
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     if agg_mode == "pedal_stroke":
-                        ang_deg, val = prepare_angle_value_agg(
-                            self.loaded[sid], "leftPedalCrankAngle", metric_col, sentinels, "mean")
-                        val2, _ = self._apply_value_mode(val, value_mode)
+                        t, vals = self._pedal_stroke_series(
+                            self.loaded[sid], metric_col, sentinels)
+                        val2, _ = self._apply_value_mode(vals, value_mode)
                         if compare:
-                            if b_ang_deg is None or b_val2 is None:
+                            if b_strokes is None:
                                 raise ValueError("Baseline data missing.")
-                            base_at = circular_interp_baseline(b_ang_deg, b_val2, ang_deg)
-                            y = val2 - base_at
+                            min_len = min(len(val2), len(b_strokes))
+                            if min_len == 0:
+                                raise ValueError(
+                                    "No valid values after filtering.")
+                            y = val2[:min_len] - b_strokes[:min_len]
+                            t = t[:min_len]
                         else:
                             y = val2
-                        t = ang_deg
+                    elif agg_mode == "roll_360deg":
+                        t, vals = self._roll_360_series(
+                            self.loaded[sid], metric_col, sentinels)
+                        val2, _ = self._apply_value_mode(vals, value_mode)
+                        if compare:
+                            if b_roll is None:
+                                raise ValueError("Baseline data missing.")
+                            min_len = min(len(val2), len(b_roll))
+                            if min_len == 0:
+                                raise ValueError(
+                                    "No valid values after filtering.")
+                            y = val2[:min_len] - b_roll[:min_len]
+                            t = t[:min_len]
+                        else:
+                            y = val2
                     else:
-                        vals = sanitize_numeric(self.loaded[sid][metric_col], sentinels)
-                        val2, _ = self._apply_value_mode(vals.to_numpy(dtype=float), value_mode)
+                        vals = sanitize_numeric(
+                            self.loaded[sid][metric_col], sentinels)
+                        val2, _ = self._apply_value_mode(
+                            vals.to_numpy(dtype=float), value_mode)
                         if compare:
                             min_len = min(len(val2), len(b_val2))
                             if min_len == 0:
-                                raise ValueError("No valid values after filtering.")
+                                raise ValueError(
+                                    "No valid values after filtering.")
                             delta = val2[:min_len] - b_val2[:min_len]
                             t = np.arange(min_len, dtype=float) / 100.0
                             y = delta
@@ -1857,7 +1995,10 @@ class DashboardDataPlotter(tk.Tk):
             mode_str = "absolute" if value_mode == "absolute" else "% of mean"
             if agg_mode == "pedal_stroke":
                 base_title = f"Pedal stroke {metric_col} ({mode_str})"
-                x_title = "Crank angle (deg)"
+                x_title = "Pedal stroke #"
+            elif agg_mode == "roll_360deg":
+                base_title = f"Roll 360deg {metric_col} ({mode_str})"
+                x_title = "Record #"
             else:
                 base_title = f"Time series {metric_col} ({mode_str})"
                 x_title = "Time (s)"

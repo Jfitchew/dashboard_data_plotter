@@ -16,6 +16,7 @@ from dashboard_data_plotter.data.loaders import (
 )
 from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
 from dashboard_data_plotter.utils.log import log_exception, DEFAULT_LOG_PATH
+from dashboard_data_plotter.version import APP_TITLE
 import os
 import sys
 import json
@@ -99,7 +100,7 @@ class ToolTip:
 class DashboardDataPlotter(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Dashboard Data Plotter (Tkinter)")
+        self.title(APP_TITLE)
         self.geometry("1360x876")
 
         # Internal storage:
@@ -146,6 +147,33 @@ class DashboardDataPlotter(tk.Tk):
 
         self._set_plot_type_controls_state()
         self._set_compare_controls_state()
+
+    def _dataset_color_cycle(self):
+        prop_cycle = matplotlib.rcParams.get("axes.prop_cycle")
+        if prop_cycle:
+            colors = prop_cycle.by_key().get("color", [])
+            if colors:
+                return list(colors)
+        return [
+            "#1f77b4",
+            "#ff7f0e",
+            "#2ca02c",
+            "#d62728",
+            "#9467bd",
+            "#8c564b",
+            "#e377c2",
+            "#7f7f7f",
+            "#bcbd22",
+            "#17becf",
+        ]
+
+    def _dataset_color_map(self):
+        ids = list(self.get_plot_order_source_ids())
+        for sid in self.loaded.keys():
+            if sid not in ids:
+                ids.append(sid)
+        colors = self._dataset_color_cycle()
+        return {sid: colors[idx % len(colors)] for idx, sid in enumerate(ids)}
 
     # ---------------- UI ----------------
     def _build_ui(self):
@@ -1116,6 +1144,8 @@ class DashboardDataPlotter(tk.Tk):
 
     def _plot_plotly_bar(self, angle_col, metric_col, sentinels, value_mode,
                          compare, baseline_id, baseline_display, fixed_range):
+        color_map = self._dataset_color_map()
+        baseline_color = color_map.get(baseline_id, "red")
         ordered = []
         for sid in self.get_plot_order_source_ids():
             if compare and sid == baseline_id:
@@ -1132,7 +1162,7 @@ class DashboardDataPlotter(tk.Tk):
             b_val2, _ = self._apply_value_mode(b_val, value_mode)
             baseline_mean = float(np.nanmean(b_val2))
 
-        labels, heights, errors = [], [], []
+        labels, heights, errors, bar_colors = [], [], [], []
         for sid in ordered:
             label = self.id_to_display.get(sid, os.path.basename(sid))
             try:
@@ -1143,6 +1173,7 @@ class DashboardDataPlotter(tk.Tk):
                 heights.append(0.0 if compare and sid == baseline_id else (
                     mval - baseline_mean if compare else mval))
                 labels.append(label)
+                bar_colors.append(color_map.get(sid, "#1f77b4"))
             except Exception as e:
                 errors.append(f"{label}: {e}")
 
@@ -1164,7 +1195,7 @@ class DashboardDataPlotter(tk.Tk):
             y_title = metric_col
 
         fig = go.Figure()
-        fig.add_bar(x=labels, y=heights, marker_color="#1f77b4")
+        fig.add_bar(x=labels, y=heights, marker_color=bar_colors)
         fig.update_layout(
             title=title,
             xaxis_title="Dataset",
@@ -1174,7 +1205,8 @@ class DashboardDataPlotter(tk.Tk):
         if fixed_range:
             fig.update_yaxes(range=[fixed_range[0], fixed_range[1]])
         fig.add_shape(type="line", x0=-0.5, x1=max(len(labels) - 0.5, 0.5),
-                      y0=0, y1=0, line=dict(color="red" if compare else "black", width=1.2))
+                      y0=0, y1=0,
+                      line=dict(color=baseline_color if compare else "black", width=1.8 if compare else 1.2))
 
         self._open_plotly_figure(fig, f"Plotted {len(labels)} bar(s).")
         if errors:
@@ -1187,6 +1219,8 @@ class DashboardDataPlotter(tk.Tk):
         fig = go.Figure()
         self._apply_cartesian_background_plotly(fig)
         range_values = []
+        color_map = self._dataset_color_map()
+        baseline_color = color_map.get(baseline_id, "red")
 
         if not compare:
             for sid in self.get_plot_order_source_ids():
@@ -1206,8 +1240,10 @@ class DashboardDataPlotter(tk.Tk):
                     if close_loop and len(ang_deg2) > 2:
                         ang_deg2 = np.concatenate([ang_deg2, [360.0]])
                         val2 = np.concatenate([val2, [val2[0]]])
+                    color = color_map.get(sid)
                     fig.add_scatter(
-                        x=ang_deg2, y=val2, mode="lines+markers", name=label, marker=dict(size=4))
+                        x=ang_deg2, y=val2, mode="lines+markers", name=label,
+                        marker=dict(size=4, color=color), line=dict(color=color, width=1.5))
                     range_values.append(val2)
                     plotted += 1
                 except Exception as e:
@@ -1253,8 +1289,10 @@ class DashboardDataPlotter(tk.Tk):
                     if close_loop and len(ang_deg2) > 2:
                         ang_deg2 = np.concatenate([ang_deg2, [360.0]])
                         delta2 = np.concatenate([delta2, [delta2[0]]])
+                    color = color_map.get(sid)
                     fig.add_scatter(
-                        x=ang_deg2, y=delta2, mode="lines+markers", name=label, marker=dict(size=4))
+                        x=ang_deg2, y=delta2, mode="lines+markers", name=label,
+                        marker=dict(size=4, color=color), line=dict(color=color, width=1.5))
                     range_values.append(delta2)
                     plotted += 1
                 except Exception as e:
@@ -1277,7 +1315,7 @@ class DashboardDataPlotter(tk.Tk):
 
         fig.add_shape(
             type="line", x0=0, x1=360, y0=0, y1=0,
-            line=dict(color="red" if compare else "black", width=1.2))
+            line=dict(color=baseline_color if compare else "black", width=1.8 if compare else 1.2))
 
         fig.update_layout(
             title=title,
@@ -1299,6 +1337,8 @@ class DashboardDataPlotter(tk.Tk):
         plotted, errors = 0, []
         fig = go.Figure()
         bg_applied = self._apply_radar_background_plotly(fig)
+        color_map = self._dataset_color_map()
+        baseline_color = color_map.get(baseline_id, "red")
 
         if not compare:
             range_values = []
@@ -1315,8 +1355,10 @@ class DashboardDataPlotter(tk.Tk):
                     if close_loop and len(theta) > 2:
                         theta = np.concatenate([theta, [theta[0]]])
                         r = np.concatenate([r, [r[0]]])
+                    color = color_map.get(sid)
                     fig.add_scatterpolar(
-                        theta=theta, r=r, mode="lines+markers", name=label, marker=dict(size=4))
+                        theta=theta, r=r, mode="lines+markers", name=label,
+                        marker=dict(size=4, color=color), line=dict(color=color, width=1.5))
                     range_values.append(val2)
                     plotted += 1
                 except Exception as e:
@@ -1416,7 +1458,8 @@ class DashboardDataPlotter(tk.Tk):
             theta_ring = np.linspace(0, 360, 361)
             r_ring = np.full_like(theta_ring, offset, dtype=float)
             fig.add_scatterpolar(
-                theta=theta_ring, r=r_ring, mode="lines", line=dict(width=2.2, color="red"),
+                theta=theta_ring, r=r_ring, mode="lines",
+                line=dict(width=2.6, color=baseline_color),
                 name=f"Baseline = 0 ({b_label})")
 
             for sid, (ang_deg2, delta2) in deltas_by_id.items():
@@ -1426,8 +1469,10 @@ class DashboardDataPlotter(tk.Tk):
                 if close_loop and len(theta) > 2:
                     theta = np.concatenate([theta, [theta[0]]])
                     r = np.concatenate([r, [r[0]]])
+                color = color_map.get(sid)
                 fig.add_scatterpolar(
-                    theta=theta, r=r, mode="lines+markers", name=label, marker=dict(size=4))
+                    theta=theta, r=r, mode="lines+markers", name=label,
+                    marker=dict(size=4, color=color), line=dict(color=color, width=1.5))
                 plotted += 1
 
             tick_vals = np.linspace(-max_abs, max_abs, 5)
@@ -1536,6 +1581,8 @@ class DashboardDataPlotter(tk.Tk):
         if plot_type == "bar":
             self.fig.clf()
             self.ax = self.fig.add_subplot(111)
+            color_map = self._dataset_color_map()
+            baseline_color = color_map.get(baseline_id, "red")
 
             ordered = []
             for sid in self.get_plot_order_source_ids():
@@ -1552,7 +1599,7 @@ class DashboardDataPlotter(tk.Tk):
                 b_val2, _ = self._apply_value_mode(b_val, value_mode)
                 baseline_mean = float(np.nanmean(b_val2))
 
-            labels, heights, errors = [], [], []
+            labels, heights, errors, bar_colors = [], [], [], []
             for sid in ordered:
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
@@ -1563,6 +1610,7 @@ class DashboardDataPlotter(tk.Tk):
                     heights.append(0.0 if compare and sid == baseline_id else (
                         mval - baseline_mean if compare else mval))
                     labels.append(label)
+                    bar_colors.append(color_map.get(sid, "#1f77b4"))
                 except Exception as e:
                     errors.append(f"{label}: {e}")
 
@@ -1574,8 +1622,9 @@ class DashboardDataPlotter(tk.Tk):
 
             x = np.arange(len(labels))
             self.ax.axhline(
-                0.0, color="red" if compare else "black", linewidth=1.2)
-            self.ax.bar(x, heights)
+                0.0, color=baseline_color if compare else "black",
+                linewidth=1.8 if compare else 1.2)
+            self.ax.bar(x, heights, color=bar_colors)
             self.ax.set_xticks(x)
             self.ax.set_xticklabels(labels, rotation=45, ha="right")
 
@@ -1621,6 +1670,8 @@ class DashboardDataPlotter(tk.Tk):
 
             plotted, errors = 0, []
             range_values = []
+            color_map = self._dataset_color_map()
+            baseline_color = color_map.get(baseline_id, "red")
 
             if not compare:
                 for sid in self.get_plot_order_source_ids():
@@ -1640,8 +1691,9 @@ class DashboardDataPlotter(tk.Tk):
                         if close_loop and len(ang_deg2) > 2:
                             ang_deg2 = np.concatenate([ang_deg2, [360.0]])
                             val2 = np.concatenate([val2, [val2[0]]])
+                        color = color_map.get(sid)
                         self.ax.plot(ang_deg2, val2, marker="o",
-                                     markersize=3, linewidth=1.5, label=label)
+                                     markersize=3, linewidth=1.5, label=label, color=color)
                         range_values.append(val2)
                         plotted += 1
                     except Exception as e:
@@ -1688,8 +1740,9 @@ class DashboardDataPlotter(tk.Tk):
                         if close_loop and len(ang_deg2) > 2:
                             ang_deg2 = np.concatenate([ang_deg2, [360.0]])
                             delta2 = np.concatenate([delta2, [delta2[0]]])
+                        color = color_map.get(sid)
                         self.ax.plot(ang_deg2, delta2, marker="o",
-                                     markersize=3, linewidth=1.5, label=label)
+                                     markersize=3, linewidth=1.5, label=label, color=color)
                         range_values.append(delta2)
                         plotted += 1
                     except Exception as e:
@@ -1707,7 +1760,8 @@ class DashboardDataPlotter(tk.Tk):
                 return
 
             self.ax.axhline(
-                0.0, color="red" if compare else "black", linewidth=1.2)
+                0.0, color=baseline_color if compare else "black",
+                linewidth=1.8 if compare else 1.2)
             self.ax.set_xlabel("Crank angle (deg)")
             self.ax.set_xlim(0, 360)
             if plotted:
@@ -1750,6 +1804,8 @@ class DashboardDataPlotter(tk.Tk):
         self._apply_radar_background_matplotlib(self.ax)
 
         plotted, errors = 0, []
+        color_map = self._dataset_color_map()
+        baseline_color = color_map.get(baseline_id, "red")
 
         if not compare:
             for sid in self.get_plot_order_source_ids():
@@ -1766,8 +1822,9 @@ class DashboardDataPlotter(tk.Tk):
                         theta = np.concatenate([theta, [theta[0]]])
                         val2 = np.concatenate([val2, [val2[0]]])
 
+                    color = color_map.get(sid)
                     self.ax.plot(theta, val2, marker="o",
-                                 markersize=3, linewidth=1.5, label=label)
+                                 markersize=3, linewidth=1.5, label=label, color=color)
                     plotted += 1
                 except Exception as e:
                     errors.append(f"{label}: {e}")
@@ -1843,8 +1900,8 @@ class DashboardDataPlotter(tk.Tk):
 
             theta_ring = np.linspace(0, 2 * np.pi, 361)
             r_ring = np.full_like(theta_ring, offset, dtype=float)
-            self.ax.plot(theta_ring, r_ring, linewidth=2.2,
-                         color="red", label=f"Baseline = 0 ({b_label})")
+            self.ax.plot(theta_ring, r_ring, linewidth=2.6,
+                         color=baseline_color, label=f"Baseline = 0 ({b_label})")
 
             for sid, (ang_deg2, delta2) in deltas_by_id.items():
                 label = self.id_to_display.get(sid, os.path.basename(sid))
@@ -1853,8 +1910,9 @@ class DashboardDataPlotter(tk.Tk):
                 if close_loop and len(theta) > 2:
                     theta = np.concatenate([theta, [theta[0]]])
                     r = np.concatenate([r, [r[0]]])
+                color = color_map.get(sid)
                 self.ax.plot(theta, r, marker="o", markersize=3,
-                             linewidth=1.5, label=label)
+                             linewidth=1.5, label=label, color=color)
                 plotted += 1
 
             mode_str = "absolute" if value_mode == "absolute" else "% of mean"

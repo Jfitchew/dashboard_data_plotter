@@ -14,6 +14,8 @@ from dashboard_data_plotter.data.loaders import (
     df_to_jsonable_records,
     prepare_angle_value,
     prepare_angle_value_agg,
+    aggregate_metric,
+    sanitize_numeric,
 )
 from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
 from dashboard_data_plotter.utils.log import log_exception, DEFAULT_LOG_PATH
@@ -316,6 +318,10 @@ class DashboardDataPlotter(tk.Tk):
             pt, text="Bar (avg)", variable=self.plot_type_var, value="bar",
             command=self._on_plot_type_change)
         self.rb_bar.grid(row=1, column=0, sticky="w")
+        self.rb_timeseries = ttk.Radiobutton(
+            pt, text="Time series", variable=self.plot_type_var, value="timeseries",
+            command=self._on_plot_type_change)
+        self.rb_timeseries.grid(row=1, column=1, sticky="w", padx=(8, 0))
 
         self.radar_background_chk = ttk.Checkbutton(
             pt,
@@ -351,7 +357,7 @@ class DashboardDataPlotter(tk.Tk):
             row=0, column=2, sticky="w", padx=(10, 0))
         self.agg_combo = ttk.Combobox(
             metric_frame, textvariable=self.agg_var,
-            values=["mean", "median", "trimmed mean"], state="readonly", width=16)
+            values=["mean", "median", "10% trimmed mean"], state="readonly", width=16)
         self.agg_combo.grid(row=0, column=3, sticky="w", padx=(6, 0))
 
         range_frame = ttk.Frame(left)
@@ -481,6 +487,7 @@ class DashboardDataPlotter(tk.Tk):
             (self.rb_radar, "Radar (polar) plot using crank angle."),
             (self.rb_cartesian, "Cartesian plot of metric vs crank angle (0-360°)."),
             (self.rb_bar, "Bar plot of mean metric per dataset."),
+            (self.rb_timeseries, "Time series plot of raw metric values vs record index."),
             (self.chk_plotly, "Open an interactive Plotly plot in your browser."),
             (self.radar_background_chk,
              "Toggle background image/bands\nfor radar/cartesian plots."),
@@ -489,9 +496,9 @@ class DashboardDataPlotter(tk.Tk):
              "Close loop by repeating the first point at 360°."),
             (self.metric_combo, "Metric column to plot."),
             (self.agg_combo,
-             "Aggregate metric values per angle bin.\n"
-             "Mean = average, Median = middle value,\n"
-             "10% trimmed mean drops lowest/highest 10% first."),
+             "Average type depends on plot:\n"
+             "Radar/Cartesian: mean, median, 10% trimmed mean.\n"
+             "Time series: raw or pedal stroke (avg by left pedal angle)."),
             (self.range_low_entry, "Lower y-range bound (used when Fixed is on)."),
             (self.range_high_entry, "Upper y-range bound (used when Fixed is on)."),
             (self.range_fixed_chk,
@@ -529,14 +536,15 @@ class DashboardDataPlotter(tk.Tk):
     def _set_plot_type_controls_state(self):
         plot_type = (self.plot_type_var.get() or "radar").strip().lower()
         is_bar = plot_type == "bar"
+        no_angle = plot_type in ("bar", "timeseries")
         try:
             self.angle_combo.configure(
-                state="disabled" if is_bar else "readonly")
+                state="disabled" if no_angle else "readonly")
         except Exception:
             pass
         try:
             self.close_loop_chk.configure(
-                state="disabled" if is_bar else "normal")
+                state="disabled" if no_angle else "normal")
         except Exception:
             pass
         try:
@@ -589,7 +597,17 @@ class DashboardDataPlotter(tk.Tk):
         return float(np.nanmin(arr)), float(np.nanmax(arr))
 
     def _on_plot_type_change(self):
-        is_bar = (self.plot_type_var.get() == "bar")
+        plot_type = self.plot_type_var.get()
+        is_bar = (plot_type == "bar")
+        if hasattr(self, "agg_combo"):
+            if plot_type == "timeseries":
+                self.agg_combo["values"] = ["raw", "pedal stroke"]
+                if self.agg_var.get() not in self.agg_combo["values"]:
+                    self.agg_var.set("raw")
+            else:
+                self.agg_combo["values"] = ["mean", "median", "10% trimmed mean"]
+                if self.agg_var.get() not in self.agg_combo["values"]:
+                    self.agg_var.set("median")
         if hasattr(self, "rb_percent_mean"):
             self.rb_percent_mean.configure(
                 state=("disabled" if is_bar else "normal"))
@@ -614,6 +632,18 @@ class DashboardDataPlotter(tk.Tk):
 
     def _on_compare_toggle(self):
         self._set_compare_controls_state()
+
+    def _normalize_agg_mode(self, value: str) -> str:
+        raw = str(value or "").strip().lower()
+        if raw in ("raw",):
+            return "raw"
+        if raw in ("pedal stroke", "pedal_stroke"):
+            return "pedal_stroke"
+        if raw in ("10% trimmed mean", "trimmed mean", "trimmed_mean_10"):
+            return "trimmed_mean_10"
+        if raw == "median":
+            return "median"
+        return "mean"
 
     def _snapshot_settings(self):
         return {
@@ -677,7 +707,15 @@ class DashboardDataPlotter(tk.Tk):
 
         self.angle_var.set(snap.get("angle", self.angle_var.get()))
         self.metric_var.set(snap.get("metric", self.metric_var.get()))
-        self.agg_var.set(snap.get("agg_mode", self.agg_var.get()))
+        snap_agg = snap.get("agg_mode", self.agg_var.get())
+        norm_agg = self._normalize_agg_mode(snap_agg)
+        if norm_agg == "trimmed_mean_10":
+            display_agg = "10% trimmed mean"
+        elif norm_agg == "pedal_stroke":
+            display_agg = "pedal stroke"
+        else:
+            display_agg = norm_agg
+        self.agg_var.set(display_agg)
         self.close_loop_var.set(
             bool(snap.get("close_loop", self.close_loop_var.get())))
         self.sentinels_var.set(snap.get("sentinels", self.sentinels_var.get()))
@@ -1161,7 +1199,7 @@ class DashboardDataPlotter(tk.Tk):
         self.status.set(
             f"{title} (interactive Plotly plot opened in browser).")
 
-    def _plot_plotly_bar(self, angle_col, metric_col, sentinels, value_mode,
+    def _plot_plotly_bar(self, angle_col, metric_col, sentinels, value_mode, agg_mode,
                          compare, baseline_id, baseline_display, fixed_range):
         color_map = self._dataset_color_map()
         baseline_color = color_map.get(baseline_id, "red")
@@ -1176,19 +1214,15 @@ class DashboardDataPlotter(tk.Tk):
 
         baseline_mean = 0.0
         if compare:
-            b_ang_deg, b_val = prepare_angle_value(
-                self.loaded[baseline_id], angle_col or "leftPedalCrankAngle", metric_col, sentinels)
-            b_val2, _ = self._apply_value_mode(b_val, value_mode)
-            baseline_mean = float(np.nanmean(b_val2))
+            baseline_mean = aggregate_metric(
+                self.loaded[baseline_id][metric_col], sentinels, agg_mode)
 
         labels, heights, errors, bar_colors = [], [], [], []
         for sid in ordered:
             label = self.id_to_display.get(sid, os.path.basename(sid))
             try:
-                ang_deg, val = prepare_angle_value(
-                    self.loaded[sid], angle_col or "leftPedalCrankAngle", metric_col, sentinels)
-                val2, _ = self._apply_value_mode(val, value_mode)
-                mval = float(np.nanmean(val2))
+                mval = aggregate_metric(
+                    self.loaded[sid][metric_col], sentinels, agg_mode)
                 heights.append(0.0 if compare and sid == baseline_id else (
                     mval - baseline_mean if compare else mval))
                 labels.append(label)
@@ -1204,13 +1238,18 @@ class DashboardDataPlotter(tk.Tk):
         if range_minmax:
             self._update_range_entries(*range_minmax)
 
+        agg_label = {
+            "mean": "Mean",
+            "median": "Median",
+            "trimmed_mean_10": "10% trimmed mean",
+        }.get(str(agg_mode).lower(), "Mean")
         mode_str = "absolute" if value_mode == "absolute" else "% of mean"
         if compare:
             b_label = self.id_to_display.get(baseline_id, baseline_display)
-            title = f"Mean {metric_col} difference vs baseline {b_label} ({mode_str})"
+            title = f"{agg_label} {metric_col} difference vs baseline {b_label} ({mode_str})"
             y_title = "Difference vs baseline"
         else:
-            title = f"Mean {metric_col} per dataset ({mode_str})"
+            title = f"{agg_label} {metric_col} per dataset ({mode_str})"
             y_title = metric_col
 
         fig = go.Figure()
@@ -1232,6 +1271,120 @@ class DashboardDataPlotter(tk.Tk):
             messagebox.showwarning(
                 "Partial plot", f"Plotted {len(labels)} bar(s) with errors.\n\n" + "\n".join(errors))
 
+    def _plot_plotly_timeseries(self, metric_col, sentinels, value_mode, agg_mode,
+                                compare, baseline_id, baseline_display, fixed_range):
+        plotted, errors = 0, []
+        fig = go.Figure()
+        range_values = []
+        max_t = 0.0
+        color_map = self._dataset_color_map()
+        baseline_color = color_map.get(baseline_id, "red")
+
+        b_label = None
+        b_val2 = None
+        b_ang_deg = None
+        if compare:
+            b_label = self.id_to_display.get(
+                baseline_id, os.path.basename(baseline_id))
+            if agg_mode == "pedal_stroke":
+                b_ang_deg, b_val = prepare_angle_value_agg(
+                    self.loaded[baseline_id], "leftPedalCrankAngle", metric_col, sentinels, "mean")
+                b_val2, _ = self._apply_value_mode(b_val, value_mode)
+            else:
+                b_vals = sanitize_numeric(self.loaded[baseline_id][metric_col], sentinels)
+                b_val2, _ = self._apply_value_mode(b_vals.to_numpy(dtype=float), value_mode)
+
+        for sid in self.get_plot_order_source_ids():
+            if not self.show_flag.get(sid, True):
+                continue
+            if compare and sid == baseline_id:
+                continue
+            label = self.id_to_display.get(sid, os.path.basename(sid))
+            try:
+                if agg_mode == "pedal_stroke":
+                    ang_deg, val = prepare_angle_value_agg(
+                        self.loaded[sid], "leftPedalCrankAngle", metric_col, sentinels, "mean")
+                    val2, _ = self._apply_value_mode(val, value_mode)
+                    if compare:
+                        if b_ang_deg is None or b_val2 is None:
+                            raise ValueError("Baseline data missing.")
+                        base_at = circular_interp_baseline(b_ang_deg, b_val2, ang_deg)
+                        y = val2 - base_at
+                    else:
+                        y = val2
+                    t = ang_deg
+                else:
+                    vals = sanitize_numeric(self.loaded[sid][metric_col], sentinels)
+                    val2, _ = self._apply_value_mode(vals.to_numpy(dtype=float), value_mode)
+                    if compare:
+                        min_len = min(len(val2), len(b_val2))
+                        if min_len == 0:
+                            raise ValueError("No valid values after filtering.")
+                        delta = val2[:min_len] - b_val2[:min_len]
+                        t = np.arange(min_len, dtype=float) / 100.0
+                        y = delta
+                    else:
+                        t = np.arange(len(val2), dtype=float) / 100.0
+                        y = val2
+                m = np.isfinite(t) & np.isfinite(y)
+                t = t[m]
+                y = y[m]
+                if len(t) == 0:
+                    raise ValueError("No valid values after filtering.")
+                color = color_map.get(sid)
+                if len(t):
+                    max_t = max(max_t, float(np.nanmax(t)))
+                fig.add_scatter(
+                    x=t, y=y, mode="lines+markers", name=label,
+                    marker=dict(size=3, color=color), line=dict(color=color, width=1.3))
+                range_values.append(y)
+                plotted += 1
+            except Exception as e:
+                errors.append(f"{label}: {e}")
+
+        if plotted == 0:
+            messagebox.showinfo(
+                "Nothing to plot", "No datasets produced valid time series values.")
+            return
+
+        mode_str = "absolute" if value_mode == "absolute" else "% of mean"
+        if agg_mode == "pedal_stroke":
+            base_title = f"Pedal stroke {metric_col} ({mode_str})"
+            x_title = "Crank angle (deg)"
+        else:
+            base_title = f"Time series {metric_col} ({mode_str})"
+            x_title = "Time (s)"
+        if compare and b_label:
+            title = f"{base_title} difference to Baseline ({b_label})"
+            y_title = "Difference vs baseline"
+        else:
+            title = base_title
+            y_title = metric_col
+
+        if range_values:
+            range_minmax = self._minmax_from_values(
+                np.concatenate(range_values))
+            if range_minmax:
+                self._update_range_entries(*range_minmax)
+
+        if compare and b_label:
+            fig.add_scatter(
+                x=[0, max_t], y=[0, 0], mode="lines", name=b_label,
+                line=dict(color=baseline_color, width=1.6), showlegend=True)
+        fig.update_layout(
+            title=title,
+            xaxis_title=x_title,
+            yaxis_title=y_title,
+            showlegend=True,
+        )
+        if fixed_range:
+            fig.update_yaxes(range=[fixed_range[0], fixed_range[1]])
+
+        self._open_plotly_figure(fig, f"Plotted {plotted} trace(s).")
+        if errors:
+            messagebox.showwarning(
+                "Partial plot", f"Plotted {plotted} trace(s) with errors.\n\n" + "\n".join(errors))
+
     def _plot_plotly_cartesian(self, angle_col, metric_col, sentinels, value_mode, agg_mode, close_loop,
                                compare, baseline_id, baseline_display, fixed_range):
         plotted, errors = 0, []
@@ -1240,6 +1393,18 @@ class DashboardDataPlotter(tk.Tk):
         range_values = []
         color_map = self._dataset_color_map()
         baseline_color = color_map.get(baseline_id, "red")
+
+        agg_label = {
+            "mean": "Mean",
+            "median": "Median",
+            "trimmed_mean_10": "10% trimmed mean",
+        }.get(str(agg_mode).lower(), "Mean")
+
+        agg_label = {
+            "mean": "Mean",
+            "median": "Median",
+            "trimmed_mean_10": "10% trimmed mean",
+        }.get(str(agg_mode).lower(), "Mean")
 
         if not compare:
             for sid in self.get_plot_order_source_ids():
@@ -1269,7 +1434,7 @@ class DashboardDataPlotter(tk.Tk):
                     errors.append(f"{label}: {e}")
 
             mode_str = "absolute" if value_mode == "absolute" else "% of mean"
-            title = f"{metric_col} ({mode_str})"
+            title = f"{agg_label} {metric_col} ({mode_str})"
             y_title = metric_col
         else:
             b_label = self.id_to_display.get(
@@ -1321,7 +1486,7 @@ class DashboardDataPlotter(tk.Tk):
                     errors.append(f"{label}: {e}")
 
             mode_str = "absolute" if value_mode == "absolute" else "% of mean"
-            title = f"{metric_col} ({mode_str}) difference to Baseline ({b_label})"
+            title = f"{agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})"
             y_title = "Difference vs baseline"
 
         if plotted == 0:
@@ -1410,7 +1575,7 @@ class DashboardDataPlotter(tk.Tk):
                 polar_layout["radialaxis"]["gridcolor"] = "#A5A5A5"
                 polar_layout["radialaxis"]["linecolor"] = "#797979"
             fig.update_layout(
-                title=f"{metric_col} ({mode_str})",
+                title=f"{agg_label} {metric_col} ({mode_str})",
                 polar=polar_layout,
                 showlegend=True,
             )
@@ -1529,7 +1694,7 @@ class DashboardDataPlotter(tk.Tk):
                 polar_layout["radialaxis"]["gridcolor"] = "#A5A5A5"
                 polar_layout["radialaxis"]["linecolor"] = "#797979"
             fig.update_layout(
-                title=f"{metric_col} ({mode_str}) difference to Baseline ({b_label})",
+                title=f"{agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})",
                 polar=polar_layout,
                 showlegend=True,
             )
@@ -1559,7 +1724,12 @@ class DashboardDataPlotter(tk.Tk):
         sentinels = parse_sentinels(self.sentinels_var.get())
         close_loop = bool(self.close_loop_var.get())
         value_mode = self.value_mode_var.get()
-        agg_mode = (self.agg_var.get() or "mean").strip().lower()
+        agg_mode = self._normalize_agg_mode(self.agg_var.get())
+        agg_label = {
+            "mean": "Mean",
+            "median": "Median",
+            "trimmed_mean_10": "10% trimmed mean",
+        }.get(agg_mode, "Mean")
 
         compare = bool(self.compare_var.get())
         baseline_display = self.baseline_display_var.get().strip()
@@ -1579,9 +1749,15 @@ class DashboardDataPlotter(tk.Tk):
             return
 
         if self.use_plotly_var.get():
+            if plot_type == "timeseries":
+                self._plot_plotly_timeseries(
+                    metric_col, sentinels, value_mode, agg_mode,
+                    compare, baseline_id, baseline_display, fixed_range)
+                self._push_history()
+                return
             if plot_type == "bar":
                 self._plot_plotly_bar(
-                    angle_col, metric_col, sentinels, value_mode,
+                    angle_col, metric_col, sentinels, value_mode, agg_mode,
                     compare, baseline_id, baseline_display, fixed_range)
                 self._push_history()
                 return
@@ -1598,6 +1774,135 @@ class DashboardDataPlotter(tk.Tk):
                 self._plot_plotly_radar(
                     angle_col, metric_col, sentinels, value_mode, agg_mode, close_loop,
                     compare, baseline_id, baseline_display, fixed_range)
+            self._push_history()
+            return
+
+        # ---- TIME SERIES PLOT ----
+        if plot_type == "timeseries":
+            self.fig.clf()
+            self.ax = self.fig.add_subplot(111)
+            self.ax.clear()
+
+            plotted, errors = 0, []
+            range_values = []
+            color_map = self._dataset_color_map()
+            baseline_color = color_map.get(baseline_id, "red")
+
+            b_label = None
+            b_val2 = None
+            b_ang_deg = None
+            if compare:
+                b_label = self.id_to_display.get(
+                    baseline_id, os.path.basename(baseline_id))
+                if agg_mode == "pedal_stroke":
+                    b_ang_deg, b_val = prepare_angle_value_agg(
+                        self.loaded[baseline_id], "leftPedalCrankAngle", metric_col, sentinels, "mean")
+                    b_val2, _ = self._apply_value_mode(b_val, value_mode)
+                else:
+                    b_vals = sanitize_numeric(self.loaded[baseline_id][metric_col], sentinels)
+                    b_val2, _ = self._apply_value_mode(b_vals.to_numpy(dtype=float), value_mode)
+
+            for sid in self.get_plot_order_source_ids():
+                if not self.show_flag.get(sid, True):
+                    continue
+                if compare and sid == baseline_id:
+                    continue
+                label = self.id_to_display.get(sid, os.path.basename(sid))
+                try:
+                    if agg_mode == "pedal_stroke":
+                        ang_deg, val = prepare_angle_value_agg(
+                            self.loaded[sid], "leftPedalCrankAngle", metric_col, sentinels, "mean")
+                        val2, _ = self._apply_value_mode(val, value_mode)
+                        if compare:
+                            if b_ang_deg is None or b_val2 is None:
+                                raise ValueError("Baseline data missing.")
+                            base_at = circular_interp_baseline(b_ang_deg, b_val2, ang_deg)
+                            y = val2 - base_at
+                        else:
+                            y = val2
+                        t = ang_deg
+                    else:
+                        vals = sanitize_numeric(self.loaded[sid][metric_col], sentinels)
+                        val2, _ = self._apply_value_mode(vals.to_numpy(dtype=float), value_mode)
+                        if compare:
+                            min_len = min(len(val2), len(b_val2))
+                            if min_len == 0:
+                                raise ValueError("No valid values after filtering.")
+                            delta = val2[:min_len] - b_val2[:min_len]
+                            t = np.arange(min_len, dtype=float) / 100.0
+                            y = delta
+                        else:
+                            t = np.arange(len(val2), dtype=float) / 100.0
+                            y = val2
+                    m = np.isfinite(t) & np.isfinite(y)
+                    t = t[m]
+                    y = y[m]
+                    if len(t) == 0:
+                        raise ValueError("No valid values after filtering.")
+                    color = color_map.get(sid)
+                    self.ax.plot(
+                        t, y, marker="o", markersize=2.5,
+                        linewidth=1.2, label=label, color=color)
+                    range_values.append(y)
+                    plotted += 1
+                except Exception as e:
+                    errors.append(f"{label}: {e}")
+
+            if plotted == 0:
+                messagebox.showinfo(
+                    "Nothing to plot", "No datasets produced valid time series values.")
+                self._redraw_empty()
+                return
+
+            mode_str = "absolute" if value_mode == "absolute" else "% of mean"
+            if agg_mode == "pedal_stroke":
+                base_title = f"Pedal stroke {metric_col} ({mode_str})"
+                x_title = "Crank angle (deg)"
+            else:
+                base_title = f"Time series {metric_col} ({mode_str})"
+                x_title = "Time (s)"
+            if compare and b_label:
+                self.ax.set_title(
+                    f"{base_title} difference to Baseline ({b_label})")
+                self.ax.set_ylabel("Difference vs baseline")
+                baseline_handle = self.ax.axhline(
+                    0.0, color=baseline_color, linewidth=1.4, label=b_label)
+            else:
+                self.ax.set_title(base_title)
+                self.ax.set_ylabel(metric_col)
+                baseline_handle = None
+
+            self.ax.set_xlabel(x_title)
+            self.ax.grid(True, linestyle=":")
+            if fixed_range:
+                self.ax.set_ylim(fixed_range[0], fixed_range[1])
+            elif range_values:
+                range_minmax = self._minmax_from_values(
+                    np.concatenate(range_values))
+                if range_minmax:
+                    self.ax.set_ylim(range_minmax[0], range_minmax[1])
+            low, high = self.ax.get_ylim()
+            self._update_range_entries(low, high)
+
+            handles, labels = self.ax.get_legend_handles_labels()
+            if compare and baseline_handle and baseline_handle not in handles:
+                handles.insert(0, baseline_handle)
+                labels.insert(0, b_label)
+            if handles:
+                self.ax.legend(
+                    handles, labels,
+                    loc="upper left", bbox_to_anchor=(1.01, 1.02),
+                    fontsize=9, frameon=False)
+                self.fig.subplots_adjust(left=0.06, right=0.82)
+
+            self.canvas.draw_idle()
+
+            msg = f"Plotted {plotted} trace(s)."
+            if errors:
+                msg += " Some datasets failed (details shown)."
+                messagebox.showwarning(
+                    "Partial plot", msg + "\n\n" + "\n".join(errors))
+            self.status.set(msg)
             self._push_history()
             return
 
@@ -1618,19 +1923,15 @@ class DashboardDataPlotter(tk.Tk):
                 ordered.append(baseline_id)
 
             if compare:
-                b_ang_deg, b_val = prepare_angle_value(
-                    self.loaded[baseline_id], angle_col or "leftPedalCrankAngle", metric_col, sentinels)
-                b_val2, _ = self._apply_value_mode(b_val, value_mode)
-                baseline_mean = float(np.nanmean(b_val2))
+                baseline_mean = aggregate_metric(
+                    self.loaded[baseline_id][metric_col], sentinels, agg_mode)
 
             labels, heights, errors, bar_colors = [], [], [], []
             for sid in ordered:
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
-                    ang_deg, val = prepare_angle_value(
-                        self.loaded[sid], angle_col or "leftPedalCrankAngle", metric_col, sentinels)
-                    val2, _ = self._apply_value_mode(val, value_mode)
-                    mval = float(np.nanmean(val2))
+                    mval = aggregate_metric(
+                        self.loaded[sid][metric_col], sentinels, agg_mode)
                     heights.append(0.0 if compare and sid == baseline_id else (
                         mval - baseline_mean if compare else mval))
                     labels.append(label)
@@ -1647,7 +1948,7 @@ class DashboardDataPlotter(tk.Tk):
             x = np.arange(len(labels))
             # Reset margins to use full width (no right-side legend for bar plots).
             self.fig.subplots_adjust(left=0.08, right=0.98)
-            baseline_label = b_label if compare else None
+            baseline_label = None
             baseline_handle = self.ax.axhline(
                 0.0, color=baseline_color if compare else "black",
                 linewidth=1.8 if compare else 1.2, label=baseline_label)
@@ -1655,15 +1956,21 @@ class DashboardDataPlotter(tk.Tk):
             self.ax.set_xticks(x)
             self.ax.set_xticklabels(labels, rotation=45, ha="right")
 
+            agg_label = {
+                "mean": "Mean",
+                "median": "Median",
+                "trimmed_mean_10": "10% trimmed mean",
+            }.get(str(agg_mode).lower(), "Mean")
             mode_str = "absolute" if value_mode == "absolute" else "% of mean"
             if compare:
                 b_label = self.id_to_display.get(baseline_id, baseline_display)
+                baseline_label = b_label
                 self.ax.set_title(
-                    f"Mean {metric_col} difference vs baseline {b_label} ({mode_str})")
+                    f"{agg_label} {metric_col} difference vs baseline {b_label} ({mode_str})")
                 self.ax.set_ylabel("Difference vs baseline")
             else:
                 self.ax.set_title(
-                    f"Mean {metric_col} per dataset ({mode_str})")
+                    f"{agg_label} {metric_col} per dataset ({mode_str})")
                 self.ax.set_ylabel(metric_col)
 
             if fixed_range:
@@ -1728,7 +2035,7 @@ class DashboardDataPlotter(tk.Tk):
                         errors.append(f"{label}: {e}")
 
                 mode_str = "absolute" if value_mode == "absolute" else "% of mean"
-                self.ax.set_title(f"{metric_col} ({mode_str})")
+                self.ax.set_title(f"{agg_label} {metric_col} ({mode_str})")
                 self.ax.set_ylabel(metric_col)
             else:
                 b_label = self.id_to_display.get(
@@ -1779,7 +2086,7 @@ class DashboardDataPlotter(tk.Tk):
 
                 mode_str = "absolute" if value_mode == "absolute" else "% of mean"
                 self.ax.set_title(
-                    f"{metric_col} ({mode_str}) difference to Baseline ({b_label})")
+                    f"{agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})")
                 self.ax.set_ylabel("Difference vs baseline")
 
             if plotted == 0:
@@ -1872,7 +2179,7 @@ class DashboardDataPlotter(tk.Tk):
                     errors.append(f"{label}: {e}")
 
             mode_str = "absolute" if value_mode == "absolute" else "% of mean"
-            self.ax.set_title(f"{metric_col} ({mode_str})", pad=18)
+            self.ax.set_title(f"{agg_label} {metric_col} ({mode_str})", pad=18)
             self.ax.grid(True)
             self.ax.set_position([0.05, 0.05, 0.75, 0.80])
             if plotted:
@@ -1959,7 +2266,7 @@ class DashboardDataPlotter(tk.Tk):
 
             mode_str = "absolute" if value_mode == "absolute" else "% of mean"
             self.ax.set_title(
-                f"{metric_col} ({mode_str}) difference to Baseline ({b_label})", pad=18)
+                f"{agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})", pad=18)
             self.ax.grid(True)
             self.ax.legend(loc="upper left", bbox_to_anchor=(
                 1.02, 1.05), fontsize=9, frameon=False)

@@ -146,6 +146,16 @@ def _trimmed_mean(values: pd.Series, trim_fraction: float = 0.10) -> float:
     return float(np.nanmean(arr[trim:arr.size - trim]))
 
 
+def aggregate_metric(series: pd.Series, sentinels: List[float], agg: str = "mean") -> float:
+    values = sanitize_numeric(series, sentinels)
+    agg_key = str(agg).lower()
+    if agg_key == "median":
+        return float(np.nanmedian(values.to_numpy(dtype=float)))
+    if agg_key == "trimmed_mean_10":
+        return float(_trimmed_mean(values, 0.10))
+    return float(np.nanmean(values.to_numpy(dtype=float)))
+
+
 def prepare_angle_value_agg(
     df: pd.DataFrame,
     angle_col: str,

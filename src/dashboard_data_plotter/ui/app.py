@@ -176,6 +176,12 @@ class DashboardDataPlotter(tk.Tk):
         self.btn_save_all = ttk.Button(
             btns, text="Save All...", command=self.save_all_datasets)
         self.btn_save_all.grid(row=0, column=4, padx=(6, 0))
+        self.btn_move_up = ttk.Button(
+            btns, text="Move up", command=self.move_selected_up)
+        self.btn_move_up.grid(row=0, column=5, padx=(6, 0))
+        self.btn_move_down = ttk.Button(
+            btns, text="Move down", command=self.move_selected_down)
+        self.btn_move_down.grid(row=0, column=6, padx=(6, 0))
 
         # Treeview: show checkbox + dataset name
         tv_frame = ttk.Frame(left)
@@ -428,6 +434,8 @@ class DashboardDataPlotter(tk.Tk):
             (self.btn_rename, "Rename the selected dataset."),
             (self.btn_clear_all, "Remove all loaded datasets."),
             (self.btn_save_all, "Save all datasets to a single JSON file in current order."),
+            (self.btn_move_up, "Move the selected dataset(s) up in plot order."),
+            (self.btn_move_down, "Move the selected dataset(s) down in plot order."),
             (self.files_tree, "Datasets in plot order. Click 'Show' to toggle visibility."),
             (self.paste_text,
              "Paste a JSON dataset object or a multi-dataset JSON blob here."),
@@ -754,6 +762,30 @@ class DashboardDataPlotter(tk.Tk):
                 "Rename", "Select exactly one dataset to rename.")
             return
         self.rename_dataset(sel[0])
+
+    def move_selected_up(self):
+        sel = list(self.files_tree.selection())
+        if not sel:
+            return
+        items = list(self.files_tree.get_children(""))
+        selected = [iid for iid in items if iid in sel]
+        for iid in selected:
+            index = self.files_tree.index(iid)
+            if index <= 0:
+                continue
+            self.files_tree.move(iid, "", index - 1)
+
+    def move_selected_down(self):
+        sel = list(self.files_tree.selection())
+        if not sel:
+            return
+        items = list(self.files_tree.get_children(""))
+        selected = [iid for iid in items if iid in sel]
+        for iid in reversed(selected):
+            index = self.files_tree.index(iid)
+            if index >= len(items) - 1:
+                continue
+            self.files_tree.move(iid, "", index + 1)
 
     def sort_by_dataset_name(self):
         items = list(self.files_tree.get_children(""))

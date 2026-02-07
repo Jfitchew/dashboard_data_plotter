@@ -16,6 +16,7 @@ from dashboard_data_plotter.data.loaders import (
 )
 from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
 from dashboard_data_plotter.utils.log import log_exception, DEFAULT_LOG_PATH
+from dashboard_data_plotter.version import APP_TITLE
 import os
 import sys
 import json
@@ -99,7 +100,7 @@ class ToolTip:
 class DashboardDataPlotter(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Dashboard Data Plotter (Tkinter)")
+        self.title(APP_TITLE)
         self.geometry("1360x876")
 
         # Internal storage:

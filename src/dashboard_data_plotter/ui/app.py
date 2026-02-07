@@ -164,23 +164,23 @@ class DashboardDataPlotter(tk.Tk):
         self.btn_add_files = ttk.Button(
             btns, text="Add JSON file(s)...", command=self.add_files)
         self.btn_add_files.grid(row=0, column=0, sticky="ew")
-        self.btn_remove = ttk.Button(
-            btns, text="Remove", command=self.remove_selected)
-        self.btn_remove.grid(row=0, column=1, padx=(6, 0))
-        self.btn_rename = ttk.Button(
-            btns, text="Rename...", command=self.rename_selected)
-        self.btn_rename.grid(row=0, column=2, padx=(6, 0))
         self.btn_clear_all = ttk.Button(
-            btns, text="Clear all", command=self.clear_all)
-        self.btn_clear_all.grid(row=0, column=3, padx=(6, 0))
+            btns, text="Clear all", command=self.clear_all, width=8)
+        self.btn_clear_all.grid(row=0, column=1, padx=(6, 0))
         self.btn_save_all = ttk.Button(
-            btns, text="Save All...", command=self.save_all_datasets)
-        self.btn_save_all.grid(row=0, column=4, padx=(6, 0))
+            btns, text="Save all", command=self.save_all_datasets, width=8)
+        self.btn_save_all.grid(row=0, column=2, padx=(6, 0))
+        self.btn_remove = ttk.Button(
+            btns, text="Remove", command=self.remove_selected, width=8)
+        self.btn_remove.grid(row=0, column=3, padx=(6, 0))
+        self.btn_rename = ttk.Button(
+            btns, text="Rename", command=self.rename_selected, width=8)
+        self.btn_rename.grid(row=0, column=4, padx=(6, 0))
         self.btn_move_up = ttk.Button(
-            btns, text="Move up", command=self.move_selected_up)
+            btns, text="Up", command=self.move_selected_up, width=3)
         self.btn_move_up.grid(row=0, column=5, padx=(6, 0))
         self.btn_move_down = ttk.Button(
-            btns, text="Move down", command=self.move_selected_down)
+            btns, text="Dn", command=self.move_selected_down, width=3)
         self.btn_move_down.grid(row=0, column=6, padx=(6, 0))
 
         # Treeview: show checkbox + dataset name

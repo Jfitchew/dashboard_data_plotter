@@ -146,8 +146,25 @@ def _trimmed_mean(values: pd.Series, trim_fraction: float = 0.10) -> float:
     return float(np.nanmean(arr[trim:arr.size - trim]))
 
 
-def aggregate_metric(series: pd.Series, sentinels: List[float], agg: str = "mean") -> float:
+def filter_outliers_mad(series: pd.Series, threshold: float) -> pd.Series:
+    x = pd.to_numeric(series, errors="coerce")
+    median = float(np.nanmedian(x))
+    mad = float(np.nanmedian(np.abs(x - median)))
+    if not np.isfinite(mad) or mad == 0.0:
+        return x
+    z = 0.6745 * (x - median) / mad
+    return x.mask(np.abs(z) > threshold)
+
+
+def aggregate_metric(
+    series: pd.Series,
+    sentinels: List[float],
+    agg: str = "mean",
+    outlier_threshold: float | None = None,
+) -> float:
     values = sanitize_numeric(series, sentinels)
+    if outlier_threshold is not None:
+        values = filter_outliers_mad(values, outlier_threshold)
     agg_key = str(agg).lower()
     if agg_key == "median":
         return float(np.nanmedian(values.to_numpy(dtype=float)))
@@ -162,6 +179,7 @@ def prepare_angle_value_agg(
     metric_col: str,
     sentinels: List[float],
     agg: str = "mean",
+    outlier_threshold: float | None = None,
 ):
     """
     Returns:
@@ -179,6 +197,8 @@ def prepare_angle_value_agg(
         convert_br_to_standard=convert_br,
     )
     val = sanitize_numeric(df[metric_col], sentinels)
+    if outlier_threshold is not None:
+        val = filter_outliers_mad(val, outlier_threshold)
 
     plot_df = pd.DataFrame({"angle_deg": ang, "value": val}).dropna()
 

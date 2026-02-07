@@ -17,6 +17,7 @@ from dashboard_data_plotter.data.loaders import (
     aggregate_metric,
     sanitize_numeric,
     wrap_angle_deg,
+    filter_outliers_mad,
 )
 from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
 from dashboard_data_plotter.utils.log import log_exception, DEFAULT_LOG_PATH
@@ -118,6 +119,8 @@ class DashboardDataPlotter(tk.Tk):
         self.angle_var = tk.StringVar(value="leftPedalCrankAngle")
         self.metric_var = tk.StringVar(value="")
         self.agg_var = tk.StringVar(value="median")
+        self.remove_outliers_var = tk.BooleanVar(value=False)
+        self.outlier_thresh_var = tk.StringVar(value="4.0")
         self.close_loop_var = tk.BooleanVar(value=True)
         self.sentinels_var = tk.StringVar(value=DEFAULT_SENTINELS)
 
@@ -361,6 +364,16 @@ class DashboardDataPlotter(tk.Tk):
             values=["mean", "median", "10% trimmed mean"], state="readonly", width=16)
         self.agg_combo.grid(row=0, column=3, sticky="w", padx=(6, 0))
 
+        self.outlier_chk = ttk.Checkbutton(
+            metric_frame, text="Remove outliers (MAD)", variable=self.remove_outliers_var,
+            command=self._on_outlier_toggle)
+        self.outlier_chk.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(4, 0))
+        ttk.Label(metric_frame, text="Threshold:").grid(
+            row=1, column=2, sticky="w", padx=(10, 0), pady=(4, 0))
+        self.outlier_entry = ttk.Entry(
+            metric_frame, textvariable=self.outlier_thresh_var, width=8)
+        self.outlier_entry.grid(row=1, column=3, sticky="w", padx=(6, 0), pady=(4, 0))
+
         range_frame = ttk.Frame(left)
         range_frame.grid(row=10, column=0, sticky="ew", pady=(6, 2))
         ttk.Label(range_frame, text="Range (min, max):").grid(
@@ -374,14 +387,6 @@ class DashboardDataPlotter(tk.Tk):
         self.range_fixed_chk = ttk.Checkbutton(
             range_frame, text="Fixed", variable=self.range_fixed_var)
         self.range_fixed_chk.grid(row=0, column=3, sticky="w", padx=(8, 0))
-
-        sentinel_frame = ttk.Frame(left)
-        sentinel_frame.grid(row=11, column=0, sticky="ew", pady=(6, 2))
-        ttk.Label(sentinel_frame, text="Invalid values:").grid(
-            row=0, column=0, sticky="w")
-        self.sentinel_entry = ttk.Entry(
-            sentinel_frame, textvariable=self.sentinels_var, width=32)
-        self.sentinel_entry.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
         ttk.Separator(left).grid(row=12, column=0, sticky="ew", pady=10)
 
@@ -445,6 +450,7 @@ class DashboardDataPlotter(tk.Tk):
 
         self._on_plot_type_change()
         self._set_compare_controls_state()
+        self._on_outlier_toggle()
         self._add_tooltips()
 
     def _build_plot(self):
@@ -488,7 +494,7 @@ class DashboardDataPlotter(tk.Tk):
             (self.rb_radar, "Radar (polar) plot using crank angle."),
             (self.rb_cartesian, "Cartesian plot of metric vs crank angle (0-360°)."),
             (self.rb_bar, "Bar plot of mean metric per dataset."),
-            (self.rb_timeseries, "Time series plot of raw metric values vs record index."),
+            (self.rb_timeseries, "Time series plot of full data for metric."),
             (self.chk_plotly, "Open an interactive Plotly plot in your browser."),
             (self.radar_background_chk,
              "Toggle background image/bands\nfor radar/cartesian plots."),
@@ -499,13 +505,21 @@ class DashboardDataPlotter(tk.Tk):
             (self.agg_combo,
              "Average type depends on plot:\n"
              "Radar/Cartesian: mean, median, 10% trimmed mean.\n"
-             "Time series: raw, per pedal stroke, or roll 360deg."),
-            (self.range_low_entry, "Lower y-range bound (used when Fixed is on)."),
-            (self.range_high_entry, "Upper y-range bound (used when Fixed is on)."),
+             "Time series: raw, pedal stroke, or roll 360deg."),
+            (self.outlier_chk,
+             "Remove outliers using MAD (median absolute deviation).\n"
+             "Uses robust z-scores: 0.6745 * (x - median) / MAD."),
+            (self.outlier_entry,
+             "Outlier threshold (default 4.0).\n"
+             "Lower = more aggressive removal."),
+            (self.range_low_entry,
+             "Lower y-axis bound for the plot area (used when Fixed is on).\n"
+             "Does not change or filter the data."),
+            (self.range_high_entry,
+             "Upper y-axis bound for the plot area (used when Fixed is on).\n"
+             "Does not change or filter the data."),
             (self.range_fixed_chk,
              "Lock the y-range to the chosen values\n(easier to compare different plots)."),
-            (self.sentinel_entry,
-             "Comma-separated invalid/sentinel values to ignore."),
             (self.rb_absolute, "Plot absolute metric values."),
             (self.rb_percent_mean,
              "Plot values as percent of dataset mean (radar/cartesian only)."),
@@ -603,7 +617,7 @@ class DashboardDataPlotter(tk.Tk):
         if hasattr(self, "agg_combo"):
             if plot_type == "timeseries":
                 self.agg_combo["values"] = [
-                    "raw", "per pedal stroke", "rolling 360deg"]
+                    "raw", "pedal stroke", "roll 360deg"]
                 if self.agg_var.get() not in self.agg_combo["values"]:
                     self.agg_var.set("raw")
             else:
@@ -636,13 +650,58 @@ class DashboardDataPlotter(tk.Tk):
     def _on_compare_toggle(self):
         self._set_compare_controls_state()
 
+    def _on_outlier_toggle(self):
+        state = "normal" if self.remove_outliers_var.get() else "disabled"
+        try:
+            self.outlier_entry.configure(state=state)
+        except Exception:
+            pass
+
+    def _get_outlier_threshold(self):
+        if not self.remove_outliers_var.get():
+            return None
+        raw = self.outlier_thresh_var.get().strip()
+        if not raw:
+            messagebox.showinfo(
+                "Outlier threshold required",
+                "Enter an outlier threshold value or untick Remove outliers.",
+            )
+            return "invalid"
+        try:
+            value = float(raw)
+        except ValueError:
+            messagebox.showinfo(
+                "Invalid outlier threshold",
+                "Outlier threshold must be a valid number.",
+            )
+            return "invalid"
+        if value <= 0:
+            messagebox.showinfo(
+                "Invalid outlier threshold",
+                "Outlier threshold must be greater than 0.",
+            )
+            return "invalid"
+        return value
+
+    def _get_outlier_threshold_value(self):
+        raw = self.outlier_thresh_var.get().strip()
+        if not raw:
+            return None
+        try:
+            value = float(raw)
+        except ValueError:
+            return None
+        if value <= 0:
+            return None
+        return value
+
     def _normalize_agg_mode(self, value: str) -> str:
         raw = str(value or "").strip().lower()
         if raw in ("raw",):
             return "raw"
-        if raw in ("pedal stroke", "pedal_stroke"):
+        if raw in ("pedal stroke", "per pedal stroke", "pedal_stroke"):
             return "pedal_stroke"
-        if raw in ("roll 360deg", "roll_360deg"):
+        if raw in ("roll 360deg", "rolling 360deg", "roll_360deg"):
             return "roll_360deg"
         if raw in ("10% trimmed mean", "trimmed mean", "trimmed_mean_10"):
             return "trimmed_mean_10"
@@ -650,14 +709,96 @@ class DashboardDataPlotter(tk.Tk):
             return "median"
         return "mean"
 
-    def _pedal_stroke_series(self, df: pd.DataFrame, metric_col: str, sentinels):
+    def _get_plot_sids(self, plot_type, compare, baseline_id):
+        if plot_type == "bar":
+            ordered = []
+            for sid in self.get_plot_order_source_ids():
+                if compare and sid == baseline_id:
+                    ordered.append(sid)
+                elif self.show_flag.get(sid, True):
+                    ordered.append(sid)
+            if compare and baseline_id and baseline_id not in ordered:
+                ordered.append(baseline_id)
+            return ordered
+
+        sids = [sid for sid in self.get_plot_order_source_ids()
+                if self.show_flag.get(sid, True)]
+        if compare and baseline_id and baseline_id not in sids:
+            sids.append(baseline_id)
+        return sids
+
+    def _warn_outliers_if_needed(self, plot_type, metric_col, sentinels, compare, baseline_id):
+        if self.remove_outliers_var.get():
+            return
+        threshold = self._get_outlier_threshold_value()
+        if threshold is None:
+            return
+        sids = self._get_plot_sids(plot_type, compare, baseline_id)
+        if not sids:
+            return
+        flagged = []
+        for sid in sids:
+            df = self.loaded.get(sid)
+            if df is None or metric_col not in df.columns:
+                continue
+            values = sanitize_numeric(df[metric_col], sentinels)
+            filtered = filter_outliers_mad(values, threshold)
+            before = np.isfinite(values.to_numpy(dtype=float))
+            after = np.isfinite(filtered.to_numpy(dtype=float))
+            count = int(np.sum(before & ~after))
+            if count > 0:
+                label = self.id_to_display.get(sid, os.path.basename(sid))
+                flagged.append(f"{label} ({count})")
+        if flagged:
+            messagebox.showwarning(
+                "Outliers detected",
+                "Outliers detected above the current threshold setting in:\n\n"
+                + "\n".join(flagged)
+                + "\n\nConsider enabling 'Remove outliers' to clean these artefacts.",
+            )
+
+    def _warn_outlier_removal_rate(self, plot_type, metric_col, sentinels, compare, baseline_id, threshold):
+        if not self.remove_outliers_var.get():
+            return
+        if threshold is None:
+            return
+        sids = self._get_plot_sids(plot_type, compare, baseline_id)
+        if not sids:
+            return
+        flagged = []
+        for sid in sids:
+            df = self.loaded.get(sid)
+            if df is None or metric_col not in df.columns:
+                continue
+            values = sanitize_numeric(df[metric_col], sentinels)
+            filtered = filter_outliers_mad(values, threshold)
+            before = np.isfinite(values.to_numpy(dtype=float))
+            after = np.isfinite(filtered.to_numpy(dtype=float))
+            total = int(np.sum(before))
+            removed = int(np.sum(before & ~after))
+            if total > 0 and (removed / total) > 0.05:
+                label = self.id_to_display.get(sid, os.path.basename(sid))
+                pct = 100.0 * removed / total
+                flagged.append(f"{label} ({pct:.1f}%)")
+        if flagged:
+            messagebox.showwarning(
+                "High outlier removal",
+                "Outlier removal exceeded 5% of data in:\n\n"
+                + "\n".join(flagged)
+                + "\n\nConsider increasing the outlier threshold.",
+            )
+
+    def _pedal_stroke_series(self, df: pd.DataFrame, metric_col: str, sentinels, outlier_threshold):
         if "leftPedalCrankAngle" not in df.columns:
             raise KeyError("Angle column 'leftPedalCrankAngle' not found.")
         ang = wrap_angle_deg(
             sanitize_numeric(df["leftPedalCrankAngle"], sentinels),
             convert_br_to_standard=True,
         ).to_numpy(dtype=float)
-        val = sanitize_numeric(df[metric_col], sentinels).to_numpy(dtype=float)
+        val = sanitize_numeric(df[metric_col], sentinels)
+        if outlier_threshold is not None:
+            val = filter_outliers_mad(val, outlier_threshold)
+        val = val.to_numpy(dtype=float)
         mask = np.isfinite(ang) & np.isfinite(val)
         ang = ang[mask]
         val = val[mask]
@@ -666,17 +807,21 @@ class DashboardDataPlotter(tk.Tk):
 
         stroke_means = []
         stroke_vals = []
+        start_angle = ang[0]
         prev = ang[0]
+        wrapped = False
         for a, v in zip(ang, val):
-            # Detect wrap from high angle back to low angle.
+            # Track wrap from high angle back to low angle.
             if prev - a > 180.0:
-                if stroke_vals:
-                    stroke_means.append(float(np.nanmean(stroke_vals)))
-                stroke_vals = []
+                wrapped = True
             stroke_vals.append(v)
+            # A full stroke completes once we've wrapped and reached start_angle again.
+            if wrapped and a >= start_angle:
+                stroke_means.append(float(np.nanmean(stroke_vals)))
+                stroke_vals = []
+                wrapped = False
             prev = a
-        if stroke_vals:
-            stroke_means.append(float(np.nanmean(stroke_vals)))
+        # Do not include incomplete last stroke.
 
         if not stroke_means:
             raise ValueError("No valid pedal strokes after filtering.")
@@ -684,21 +829,24 @@ class DashboardDataPlotter(tk.Tk):
         y = np.asarray(stroke_means, dtype=float)
         return x, y
 
-    def _roll_360_series(self, df: pd.DataFrame, metric_col: str, sentinels):
+    def _roll_360_series(self, df: pd.DataFrame, metric_col: str, sentinels, outlier_threshold):
         if "leftPedalCrankAngle" not in df.columns:
             raise KeyError("Angle column 'leftPedalCrankAngle' not found.")
         ang = wrap_angle_deg(
             sanitize_numeric(df["leftPedalCrankAngle"], sentinels),
             convert_br_to_standard=True,
         ).to_numpy(dtype=float)
-        val = sanitize_numeric(df[metric_col], sentinels).to_numpy(dtype=float)
+        val = sanitize_numeric(df[metric_col], sentinels)
+        if outlier_threshold is not None:
+            val = filter_outliers_mad(val, outlier_threshold)
+        val = val.to_numpy(dtype=float)
         mask = np.isfinite(ang) & np.isfinite(val)
         ang = ang[mask]
         val = val[mask]
         if ang.size == 0:
             raise ValueError("No valid values after filtering.")
 
-        out = np.empty_like(val, dtype=float)
+        out = []
         n = len(val)
         for i in range(n):
             start_ang = ang[i]
@@ -713,10 +861,15 @@ class DashboardDataPlotter(tk.Tk):
                     break
                 prev = a
                 j += 1
-            window = val[i:j + 1] if j < n else val[i:n]
-            out[i] = float(np.nanmean(window))
+            if j >= n:
+                # No complete 360deg window for this point (and likely following points).
+                break
+            window = val[i:j + 1]
+            out.append(float(np.nanmean(window)))
+        if not out:
+            raise ValueError("No complete 360deg windows after filtering.")
         x = np.arange(len(out), dtype=float)
-        return x, out
+        return x, np.asarray(out, dtype=float)
 
     def _snapshot_settings(self):
         return {
@@ -729,6 +882,8 @@ class DashboardDataPlotter(tk.Tk):
             "plot_type": self.plot_type_var.get(),
             "use_plotly": bool(self.use_plotly_var.get()),
             "radar_background": bool(self.radar_background_var.get()),
+            "remove_outliers": bool(self.remove_outliers_var.get()),
+            "outlier_threshold": self.outlier_thresh_var.get(),
             "compare": bool(self.compare_var.get()),
             "baseline_display": self.baseline_display_var.get(),
             "range_low": self.range_low_var.get(),
@@ -801,6 +956,11 @@ class DashboardDataPlotter(tk.Tk):
             bool(snap.get("use_plotly", self.use_plotly_var.get())))
         self.radar_background_var.set(
             bool(snap.get("radar_background", self.radar_background_var.get())))
+        self.remove_outliers_var.set(
+            bool(snap.get("remove_outliers", self.remove_outliers_var.get())))
+        self.outlier_thresh_var.set(
+            snap.get("outlier_threshold", self.outlier_thresh_var.get()))
+        self._on_outlier_toggle()
         self.compare_var.set(bool(snap.get("compare", self.compare_var.get())))
         self.baseline_display_var.set(
             snap.get("baseline_display", self.baseline_display_var.get()))
@@ -1274,7 +1434,7 @@ class DashboardDataPlotter(tk.Tk):
         self.status.set(
             f"{title} (interactive Plotly plot opened in browser).")
 
-    def _plot_plotly_bar(self, angle_col, metric_col, sentinels, value_mode, agg_mode,
+    def _plot_plotly_bar(self, angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold,
                          compare, baseline_id, baseline_display, fixed_range):
         color_map = self._dataset_color_map()
         baseline_color = color_map.get(baseline_id, "red")
@@ -1290,14 +1450,14 @@ class DashboardDataPlotter(tk.Tk):
         baseline_mean = 0.0
         if compare:
             baseline_mean = aggregate_metric(
-                self.loaded[baseline_id][metric_col], sentinels, agg_mode)
+                self.loaded[baseline_id][metric_col], sentinels, agg_mode, outlier_threshold)
 
         labels, heights, errors, bar_colors = [], [], [], []
         for sid in ordered:
             label = self.id_to_display.get(sid, os.path.basename(sid))
             try:
                 mval = aggregate_metric(
-                    self.loaded[sid][metric_col], sentinels, agg_mode)
+                    self.loaded[sid][metric_col], sentinels, agg_mode, outlier_threshold)
                 heights.append(0.0 if compare and sid == baseline_id else (
                     mval - baseline_mean if compare else mval))
                 labels.append(label)
@@ -1346,7 +1506,7 @@ class DashboardDataPlotter(tk.Tk):
             messagebox.showwarning(
                 "Partial plot", f"Plotted {len(labels)} bar(s) with errors.\n\n" + "\n".join(errors))
 
-    def _plot_plotly_timeseries(self, metric_col, sentinels, value_mode, agg_mode,
+    def _plot_plotly_timeseries(self, metric_col, sentinels, value_mode, agg_mode, outlier_threshold,
                                 compare, baseline_id, baseline_display, fixed_range):
         plotted, errors = 0, []
         fig = go.Figure()
@@ -1364,17 +1524,19 @@ class DashboardDataPlotter(tk.Tk):
                 baseline_id, os.path.basename(baseline_id))
             if agg_mode == "pedal_stroke":
                 _, b_vals = self._pedal_stroke_series(
-                    self.loaded[baseline_id], metric_col, sentinels)
+                    self.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
                 b_val2, _ = self._apply_value_mode(b_vals, value_mode)
                 b_strokes = b_val2
             elif agg_mode == "roll_360deg":
                 _, b_vals = self._roll_360_series(
-                    self.loaded[baseline_id], metric_col, sentinels)
+                    self.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
                 b_val2, _ = self._apply_value_mode(b_vals, value_mode)
                 b_roll = b_val2
             else:
                 b_vals = sanitize_numeric(
                     self.loaded[baseline_id][metric_col], sentinels)
+                if outlier_threshold is not None:
+                    b_vals = filter_outliers_mad(b_vals, outlier_threshold)
                 b_val2, _ = self._apply_value_mode(
                     b_vals.to_numpy(dtype=float), value_mode)
 
@@ -1387,7 +1549,7 @@ class DashboardDataPlotter(tk.Tk):
             try:
                 if agg_mode == "pedal_stroke":
                     t, vals = self._pedal_stroke_series(
-                        self.loaded[sid], metric_col, sentinels)
+                        self.loaded[sid], metric_col, sentinels, outlier_threshold)
                     val2, _ = self._apply_value_mode(vals, value_mode)
                     if compare:
                         if b_strokes is None:
@@ -1402,7 +1564,7 @@ class DashboardDataPlotter(tk.Tk):
                         y = val2
                 elif agg_mode == "roll_360deg":
                     t, vals = self._roll_360_series(
-                        self.loaded[sid], metric_col, sentinels)
+                        self.loaded[sid], metric_col, sentinels, outlier_threshold)
                     val2, _ = self._apply_value_mode(vals, value_mode)
                     if compare:
                         if b_roll is None:
@@ -1418,6 +1580,8 @@ class DashboardDataPlotter(tk.Tk):
                 else:
                     vals = sanitize_numeric(
                         self.loaded[sid][metric_col], sentinels)
+                    if outlier_threshold is not None:
+                        vals = filter_outliers_mad(vals, outlier_threshold)
                     val2, _ = self._apply_value_mode(
                         vals.to_numpy(dtype=float), value_mode)
                     if compare:
@@ -1493,7 +1657,7 @@ class DashboardDataPlotter(tk.Tk):
             messagebox.showwarning(
                 "Partial plot", f"Plotted {plotted} trace(s) with errors.\n\n" + "\n".join(errors))
 
-    def _plot_plotly_cartesian(self, angle_col, metric_col, sentinels, value_mode, agg_mode, close_loop,
+    def _plot_plotly_cartesian(self, angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
                                compare, baseline_id, baseline_display, fixed_range):
         plotted, errors = 0, []
         fig = go.Figure()
@@ -1521,7 +1685,7 @@ class DashboardDataPlotter(tk.Tk):
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     ang_deg, val = prepare_angle_value_agg(
-                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
+                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                     val2, _ = self._apply_value_mode(val, value_mode)
                     m = np.isfinite(ang_deg) & np.isfinite(val2)
                     ang_deg2 = ang_deg[m]
@@ -1552,7 +1716,7 @@ class DashboardDataPlotter(tk.Tk):
                 line=dict(color=baseline_color, width=1.8), showlegend=True)
             try:
                 b_ang_deg, b_val = prepare_angle_value_agg(
-                    self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode)
+                    self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                 b_val2, _ = self._apply_value_mode(b_val, value_mode)
             except Exception as e:
                 messagebox.showerror(
@@ -1567,7 +1731,7 @@ class DashboardDataPlotter(tk.Tk):
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     ang_deg, val = prepare_angle_value_agg(
-                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
+                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                     val2, _ = self._apply_value_mode(val, value_mode)
                     base_at = circular_interp_baseline(
                         b_ang_deg, b_val2, ang_deg)
@@ -1628,7 +1792,7 @@ class DashboardDataPlotter(tk.Tk):
             messagebox.showwarning(
                 "Partial plot", f"Plotted {plotted} trace(s) with errors.\n\n" + "\n".join(errors))
 
-    def _plot_plotly_radar(self, angle_col, metric_col, sentinels, value_mode, agg_mode, close_loop,
+    def _plot_plotly_radar(self, angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
                            compare, baseline_id, baseline_display, fixed_range):
         plotted, errors = 0, []
         fig = go.Figure()
@@ -1644,7 +1808,7 @@ class DashboardDataPlotter(tk.Tk):
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     ang_deg, val = prepare_angle_value_agg(
-                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
+                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                     val2, _ = self._apply_value_mode(val, value_mode)
                     theta = np.asarray(ang_deg, dtype=float)
                     r = np.asarray(val2, dtype=float)
@@ -1695,7 +1859,7 @@ class DashboardDataPlotter(tk.Tk):
                 baseline_id, os.path.basename(baseline_id))
             try:
                 b_ang_deg, b_val = prepare_angle_value_agg(
-                    self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode)
+                    self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                 b_val2, _ = self._apply_value_mode(b_val, value_mode)
             except Exception as e:
                 messagebox.showerror(
@@ -1714,7 +1878,7 @@ class DashboardDataPlotter(tk.Tk):
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     ang_deg, val = prepare_angle_value_agg(
-                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
+                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                     val2, _ = self._apply_value_mode(val, value_mode)
                     base_at = circular_interp_baseline(
                         b_ang_deg, b_val2, ang_deg)
@@ -1838,6 +2002,9 @@ class DashboardDataPlotter(tk.Tk):
             "median": "Median",
             "trimmed_mean_10": "10% trimmed mean",
         }.get(agg_mode, "Mean")
+        outlier_threshold = self._get_outlier_threshold()
+        if outlier_threshold == "invalid":
+            return
 
         compare = bool(self.compare_var.get())
         baseline_display = self.baseline_display_var.get().strip()
@@ -1859,15 +2026,23 @@ class DashboardDataPlotter(tk.Tk):
         if self.use_plotly_var.get():
             if plot_type == "timeseries":
                 self._plot_plotly_timeseries(
-                    metric_col, sentinels, value_mode, agg_mode,
+                    metric_col, sentinels, value_mode, agg_mode, outlier_threshold,
                     compare, baseline_id, baseline_display, fixed_range)
                 self._push_history()
+                self._warn_outliers_if_needed(
+                    plot_type, metric_col, sentinels, compare, baseline_id)
+                self._warn_outlier_removal_rate(
+                    plot_type, metric_col, sentinels, compare, baseline_id, outlier_threshold)
                 return
             if plot_type == "bar":
                 self._plot_plotly_bar(
-                    angle_col, metric_col, sentinels, value_mode, agg_mode,
+                    angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold,
                     compare, baseline_id, baseline_display, fixed_range)
                 self._push_history()
+                self._warn_outliers_if_needed(
+                    plot_type, metric_col, sentinels, compare, baseline_id)
+                self._warn_outlier_removal_rate(
+                    plot_type, metric_col, sentinels, compare, baseline_id, outlier_threshold)
                 return
             if not angle_col:
                 messagebox.showinfo(
@@ -1875,14 +2050,22 @@ class DashboardDataPlotter(tk.Tk):
                 return
             if plot_type == "cartesian":
                 self._plot_plotly_cartesian(
-                    angle_col, metric_col, sentinels, value_mode, agg_mode, close_loop,
+                    angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
                     compare, baseline_id, baseline_display, fixed_range)
                 self._push_history()
+                self._warn_outliers_if_needed(
+                    plot_type, metric_col, sentinels, compare, baseline_id)
+                self._warn_outlier_removal_rate(
+                    plot_type, metric_col, sentinels, compare, baseline_id, outlier_threshold)
                 return
                 self._plot_plotly_radar(
-                    angle_col, metric_col, sentinels, value_mode, agg_mode, close_loop,
+                    angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
                     compare, baseline_id, baseline_display, fixed_range)
             self._push_history()
+            self._warn_outliers_if_needed(
+                plot_type, metric_col, sentinels, compare, baseline_id)
+            self._warn_outlier_removal_rate(
+                plot_type, metric_col, sentinels, compare, baseline_id, outlier_threshold)
             return
 
         # ---- TIME SERIES PLOT ----
@@ -1905,17 +2088,19 @@ class DashboardDataPlotter(tk.Tk):
                     baseline_id, os.path.basename(baseline_id))
                 if agg_mode == "pedal_stroke":
                     _, b_vals = self._pedal_stroke_series(
-                        self.loaded[baseline_id], metric_col, sentinels)
+                        self.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
                     b_val2, _ = self._apply_value_mode(b_vals, value_mode)
                     b_strokes = b_val2
                 elif agg_mode == "roll_360deg":
                     _, b_vals = self._roll_360_series(
-                        self.loaded[baseline_id], metric_col, sentinels)
+                        self.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
                     b_val2, _ = self._apply_value_mode(b_vals, value_mode)
                     b_roll = b_val2
                 else:
                     b_vals = sanitize_numeric(
                         self.loaded[baseline_id][metric_col], sentinels)
+                    if outlier_threshold is not None:
+                        b_vals = filter_outliers_mad(b_vals, outlier_threshold)
                     b_val2, _ = self._apply_value_mode(
                         b_vals.to_numpy(dtype=float), value_mode)
 
@@ -1928,7 +2113,7 @@ class DashboardDataPlotter(tk.Tk):
                 try:
                     if agg_mode == "pedal_stroke":
                         t, vals = self._pedal_stroke_series(
-                            self.loaded[sid], metric_col, sentinels)
+                            self.loaded[sid], metric_col, sentinels, outlier_threshold)
                         val2, _ = self._apply_value_mode(vals, value_mode)
                         if compare:
                             if b_strokes is None:
@@ -1943,7 +2128,7 @@ class DashboardDataPlotter(tk.Tk):
                             y = val2
                     elif agg_mode == "roll_360deg":
                         t, vals = self._roll_360_series(
-                            self.loaded[sid], metric_col, sentinels)
+                            self.loaded[sid], metric_col, sentinels, outlier_threshold)
                         val2, _ = self._apply_value_mode(vals, value_mode)
                         if compare:
                             if b_roll is None:
@@ -1959,6 +2144,8 @@ class DashboardDataPlotter(tk.Tk):
                     else:
                         vals = sanitize_numeric(
                             self.loaded[sid][metric_col], sentinels)
+                        if outlier_threshold is not None:
+                            vals = filter_outliers_mad(vals, outlier_threshold)
                         val2, _ = self._apply_value_mode(
                             vals.to_numpy(dtype=float), value_mode)
                         if compare:
@@ -2045,6 +2232,10 @@ class DashboardDataPlotter(tk.Tk):
                     "Partial plot", msg + "\n\n" + "\n".join(errors))
             self.status.set(msg)
             self._push_history()
+            self._warn_outliers_if_needed(
+                plot_type, metric_col, sentinels, compare, baseline_id)
+            self._warn_outlier_removal_rate(
+                plot_type, metric_col, sentinels, compare, baseline_id, outlier_threshold)
             return
 
         # ---- BAR PLOT ----
@@ -2065,14 +2256,14 @@ class DashboardDataPlotter(tk.Tk):
 
             if compare:
                 baseline_mean = aggregate_metric(
-                    self.loaded[baseline_id][metric_col], sentinels, agg_mode)
+                    self.loaded[baseline_id][metric_col], sentinels, agg_mode, outlier_threshold)
 
             labels, heights, errors, bar_colors = [], [], [], []
             for sid in ordered:
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     mval = aggregate_metric(
-                        self.loaded[sid][metric_col], sentinels, agg_mode)
+                        self.loaded[sid][metric_col], sentinels, agg_mode, outlier_threshold)
                     heights.append(0.0 if compare and sid == baseline_id else (
                         mval - baseline_mean if compare else mval))
                     labels.append(label)
@@ -2129,6 +2320,10 @@ class DashboardDataPlotter(tk.Tk):
                     "Partial plot", msg + "\n\n" + "\n".join(errors))
             self.status.set(msg)
             self._push_history()
+            self._warn_outliers_if_needed(
+                plot_type, metric_col, sentinels, compare, baseline_id)
+            self._warn_outlier_removal_rate(
+                plot_type, metric_col, sentinels, compare, baseline_id, outlier_threshold)
             return
 
         # ---- CARTESIAN PLOT ----
@@ -2156,7 +2351,7 @@ class DashboardDataPlotter(tk.Tk):
                     label = self.id_to_display.get(sid, os.path.basename(sid))
                     try:
                         ang_deg, val = prepare_angle_value_agg(
-                            self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
+                            self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                         val2, _ = self._apply_value_mode(val, value_mode)
                         m = np.isfinite(ang_deg) & np.isfinite(val2)
                         ang_deg2 = ang_deg[m]
@@ -2184,7 +2379,7 @@ class DashboardDataPlotter(tk.Tk):
                 baseline_label = b_label
                 try:
                     b_ang_deg, b_val = prepare_angle_value_agg(
-                        self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode)
+                        self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                     b_val2, _ = self._apply_value_mode(b_val, value_mode)
                 except Exception as e:
                     messagebox.showerror(
@@ -2200,7 +2395,7 @@ class DashboardDataPlotter(tk.Tk):
                         sid, os.path.basename(sid))
                     try:
                         ang_deg, val = prepare_angle_value_agg(
-                            self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
+                            self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                         val2, _ = self._apply_value_mode(val, value_mode)
                         base_at = circular_interp_baseline(
                             b_ang_deg, b_val2, ang_deg)
@@ -2276,6 +2471,8 @@ class DashboardDataPlotter(tk.Tk):
                     "Partial plot", msg + "\n\n" + "\n".join(errors))
             self.status.set(msg)
             self._push_history()
+            self._warn_outliers_if_needed(
+                plot_type, metric_col, sentinels, compare, baseline_id)
             return
 
         # ---- RADAR PLOT ----
@@ -2304,7 +2501,7 @@ class DashboardDataPlotter(tk.Tk):
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     ang_deg, val = prepare_angle_value_agg(
-                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
+                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                     val2, _ = self._apply_value_mode(val, value_mode)
 
                     theta = np.deg2rad(ang_deg)
@@ -2340,7 +2537,7 @@ class DashboardDataPlotter(tk.Tk):
                 baseline_id, os.path.basename(baseline_id))
             try:
                 b_ang_deg, b_val = prepare_angle_value_agg(
-                    self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode)
+                    self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                 b_val2, _ = self._apply_value_mode(b_val, value_mode)
             except Exception as e:
                 messagebox.showerror(
@@ -2357,7 +2554,7 @@ class DashboardDataPlotter(tk.Tk):
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     ang_deg, val = prepare_angle_value_agg(
-                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
+                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                     val2, _ = self._apply_value_mode(val, value_mode)
                     base_at = circular_interp_baseline(
                         b_ang_deg, b_val2, ang_deg)
@@ -2430,6 +2627,10 @@ class DashboardDataPlotter(tk.Tk):
                 "Partial plot", msg + "\n\n" + "\n".join(errors))
         self.status.set(msg)
         self._push_history()
+        self._warn_outliers_if_needed(
+            plot_type, metric_col, sentinels, compare, baseline_id)
+        self._warn_outlier_removal_rate(
+            plot_type, metric_col, sentinels, compare, baseline_id, outlier_threshold)
 
     def _radar_background_image_path(self):
         base_dir = self._assets_dir()

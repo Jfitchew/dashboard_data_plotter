@@ -134,11 +134,29 @@ def wrap_angle_deg(a: pd.Series, convert_br_to_standard: bool) -> pd.Series:
     return np.mod(a, 360.0)
 
 
-def prepare_angle_value(df: pd.DataFrame, angle_col: str, metric_col: str, sentinels: List[float]):
+def _trimmed_mean(values: pd.Series, trim_fraction: float = 0.10) -> float:
+    arr = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return float("nan")
+    arr.sort()
+    trim = int(np.floor(arr.size * trim_fraction))
+    if trim * 2 >= arr.size:
+        return float(np.nanmean(arr))
+    return float(np.nanmean(arr[trim:arr.size - trim]))
+
+
+def prepare_angle_value_agg(
+    df: pd.DataFrame,
+    angle_col: str,
+    metric_col: str,
+    sentinels: List[float],
+    agg: str = "mean",
+):
     """
     Returns:
         ang_deg (np.ndarray): sorted unique angles [0..360)
-        val (np.ndarray): mean metric at each angle (averages duplicates)
+        val (np.ndarray): aggregated metric at each angle (duplicates combined)
     """
     if angle_col not in df.columns:
         raise KeyError(f"Angle column '{angle_col}' not found.")
@@ -159,9 +177,16 @@ def prepare_angle_value(df: pd.DataFrame, angle_col: str, metric_col: str, senti
     BIN_W = 360.0 / BIN_COUNT
     plot_df["angle_bin"] = (np.round(plot_df["angle_deg"] / BIN_W) * BIN_W) % 360.0
 
+    agg_key = str(agg).lower()
+    if agg_key == "median":
+        agg_func = "median"
+    elif agg_key == "trimmed_mean_10":
+        agg_func = lambda s: _trimmed_mean(s, 0.10)
+    else:
+        agg_func = "mean"
     plot_df = (
         plot_df.groupby("angle_bin", as_index=False)["value"]
-        .mean()
+        .agg(agg_func)
         .rename(columns={"angle_bin": "angle_deg"})
         .sort_values("angle_deg")
     )
@@ -170,3 +195,12 @@ def prepare_angle_value(df: pd.DataFrame, angle_col: str, metric_col: str, senti
         raise ValueError("No valid rows after removing NaNs/sentinels.")
 
     return plot_df["angle_deg"].to_numpy(), plot_df["value"].to_numpy()
+
+
+def prepare_angle_value(df: pd.DataFrame, angle_col: str, metric_col: str, sentinels: List[float]):
+    """
+    Returns:
+        ang_deg (np.ndarray): sorted unique angles [0..360)
+        val (np.ndarray): mean metric at each angle (averages duplicates)
+    """
+    return prepare_angle_value_agg(df, angle_col, metric_col, sentinels, agg="mean")

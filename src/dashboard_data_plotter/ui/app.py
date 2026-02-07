@@ -13,6 +13,7 @@ from dashboard_data_plotter.data.loaders import (
     parse_sentinels,
     df_to_jsonable_records,
     prepare_angle_value,
+    prepare_angle_value_agg,
 )
 from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
 from dashboard_data_plotter.utils.log import log_exception, DEFAULT_LOG_PATH
@@ -113,6 +114,7 @@ class DashboardDataPlotter(tk.Tk):
 
         self.angle_var = tk.StringVar(value="leftPedalCrankAngle")
         self.metric_var = tk.StringVar(value="")
+        self.agg_var = tk.StringVar(value="median")
         self.close_loop_var = tk.BooleanVar(value=True)
         self.sentinels_var = tk.StringVar(value=DEFAULT_SENTINELS)
 
@@ -343,8 +345,14 @@ class DashboardDataPlotter(tk.Tk):
         ttk.Label(metric_frame, text="Metric column:").grid(
             row=0, column=0, sticky="w")
         self.metric_combo = ttk.Combobox(
-            metric_frame, textvariable=self.metric_var, values=[], state="readonly", width=30)
+            metric_frame, textvariable=self.metric_var, values=[], state="readonly", width=26)
         self.metric_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Label(metric_frame, text="Avg type:").grid(
+            row=0, column=2, sticky="w", padx=(10, 0))
+        self.agg_combo = ttk.Combobox(
+            metric_frame, textvariable=self.agg_var,
+            values=["mean", "median", "trimmed mean"], state="readonly", width=16)
+        self.agg_combo.grid(row=0, column=3, sticky="w", padx=(6, 0))
 
         range_frame = ttk.Frame(left)
         range_frame.grid(row=10, column=0, sticky="ew", pady=(6, 2))
@@ -480,6 +488,10 @@ class DashboardDataPlotter(tk.Tk):
             (self.close_loop_chk,
              "Close loop by repeating the first point at 360°."),
             (self.metric_combo, "Metric column to plot."),
+            (self.agg_combo,
+             "Aggregate metric values per angle bin.\n"
+             "Mean = average, Median = middle value,\n"
+             "10% trimmed mean drops lowest/highest 10% first."),
             (self.range_low_entry, "Lower y-range bound (used when Fixed is on)."),
             (self.range_high_entry, "Upper y-range bound (used when Fixed is on)."),
             (self.range_fixed_chk,
@@ -607,10 +619,13 @@ class DashboardDataPlotter(tk.Tk):
         return {
             "angle": self.angle_var.get(),
             "metric": self.metric_var.get(),
+            "agg_mode": self.agg_var.get(),
             "close_loop": bool(self.close_loop_var.get()),
             "sentinels": self.sentinels_var.get(),
             "value_mode": self.value_mode_var.get(),
             "plot_type": self.plot_type_var.get(),
+            "use_plotly": bool(self.use_plotly_var.get()),
+            "radar_background": bool(self.radar_background_var.get()),
             "compare": bool(self.compare_var.get()),
             "baseline_display": self.baseline_display_var.get(),
             "range_low": self.range_low_var.get(),
@@ -662,13 +677,17 @@ class DashboardDataPlotter(tk.Tk):
 
         self.angle_var.set(snap.get("angle", self.angle_var.get()))
         self.metric_var.set(snap.get("metric", self.metric_var.get()))
+        self.agg_var.set(snap.get("agg_mode", self.agg_var.get()))
         self.close_loop_var.set(
             bool(snap.get("close_loop", self.close_loop_var.get())))
         self.sentinels_var.set(snap.get("sentinels", self.sentinels_var.get()))
         self.value_mode_var.set(
             snap.get("value_mode", self.value_mode_var.get()))
         self.plot_type_var.set(snap.get("plot_type", self.plot_type_var.get()))
-        self.use_plotly_var.set(False)
+        self.use_plotly_var.set(
+            bool(snap.get("use_plotly", self.use_plotly_var.get())))
+        self.radar_background_var.set(
+            bool(snap.get("radar_background", self.radar_background_var.get())))
         self.compare_var.set(bool(snap.get("compare", self.compare_var.get())))
         self.baseline_display_var.set(
             snap.get("baseline_display", self.baseline_display_var.get()))
@@ -1213,7 +1232,7 @@ class DashboardDataPlotter(tk.Tk):
             messagebox.showwarning(
                 "Partial plot", f"Plotted {len(labels)} bar(s) with errors.\n\n" + "\n".join(errors))
 
-    def _plot_plotly_cartesian(self, angle_col, metric_col, sentinels, value_mode, close_loop,
+    def _plot_plotly_cartesian(self, angle_col, metric_col, sentinels, value_mode, agg_mode, close_loop,
                                compare, baseline_id, baseline_display, fixed_range):
         plotted, errors = 0, []
         fig = go.Figure()
@@ -1228,8 +1247,8 @@ class DashboardDataPlotter(tk.Tk):
                     continue
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
-                    ang_deg, val = prepare_angle_value(
-                        self.loaded[sid], angle_col, metric_col, sentinels)
+                    ang_deg, val = prepare_angle_value_agg(
+                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
                     val2, _ = self._apply_value_mode(val, value_mode)
                     m = np.isfinite(ang_deg) & np.isfinite(val2)
                     ang_deg2 = ang_deg[m]
@@ -1255,9 +1274,12 @@ class DashboardDataPlotter(tk.Tk):
         else:
             b_label = self.id_to_display.get(
                 baseline_id, os.path.basename(baseline_id))
+            fig.add_scatter(
+                x=[0, 360], y=[0, 0], mode="lines", name=b_label,
+                line=dict(color=baseline_color, width=1.8), showlegend=True)
             try:
-                b_ang_deg, b_val = prepare_angle_value(
-                    self.loaded[baseline_id], angle_col, metric_col, sentinels)
+                b_ang_deg, b_val = prepare_angle_value_agg(
+                    self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode)
                 b_val2, _ = self._apply_value_mode(b_val, value_mode)
             except Exception as e:
                 messagebox.showerror(
@@ -1271,8 +1293,8 @@ class DashboardDataPlotter(tk.Tk):
                     continue
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
-                    ang_deg, val = prepare_angle_value(
-                        self.loaded[sid], angle_col, metric_col, sentinels)
+                    ang_deg, val = prepare_angle_value_agg(
+                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
                     val2, _ = self._apply_value_mode(val, value_mode)
                     base_at = circular_interp_baseline(
                         b_ang_deg, b_val2, ang_deg)
@@ -1313,9 +1335,10 @@ class DashboardDataPlotter(tk.Tk):
             if range_minmax:
                 self._update_range_entries(*range_minmax)
 
-        fig.add_shape(
-            type="line", x0=0, x1=360, y0=0, y1=0,
-            line=dict(color=baseline_color if compare else "black", width=1.8 if compare else 1.2))
+        if not compare:
+            fig.add_shape(
+                type="line", x0=0, x1=360, y0=0, y1=0,
+                line=dict(color="black", width=1.2))
 
         fig.update_layout(
             title=title,
@@ -1332,7 +1355,7 @@ class DashboardDataPlotter(tk.Tk):
             messagebox.showwarning(
                 "Partial plot", f"Plotted {plotted} trace(s) with errors.\n\n" + "\n".join(errors))
 
-    def _plot_plotly_radar(self, angle_col, metric_col, sentinels, value_mode, close_loop,
+    def _plot_plotly_radar(self, angle_col, metric_col, sentinels, value_mode, agg_mode, close_loop,
                            compare, baseline_id, baseline_display, fixed_range):
         plotted, errors = 0, []
         fig = go.Figure()
@@ -1347,8 +1370,8 @@ class DashboardDataPlotter(tk.Tk):
                     continue
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
-                    ang_deg, val = prepare_angle_value(
-                        self.loaded[sid], angle_col, metric_col, sentinels)
+                    ang_deg, val = prepare_angle_value_agg(
+                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
                     val2, _ = self._apply_value_mode(val, value_mode)
                     theta = np.asarray(ang_deg, dtype=float)
                     r = np.asarray(val2, dtype=float)
@@ -1398,8 +1421,8 @@ class DashboardDataPlotter(tk.Tk):
             b_label = self.id_to_display.get(
                 baseline_id, os.path.basename(baseline_id))
             try:
-                b_ang_deg, b_val = prepare_angle_value(
-                    self.loaded[baseline_id], angle_col, metric_col, sentinels)
+                b_ang_deg, b_val = prepare_angle_value_agg(
+                    self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode)
                 b_val2, _ = self._apply_value_mode(b_val, value_mode)
             except Exception as e:
                 messagebox.showerror(
@@ -1417,8 +1440,8 @@ class DashboardDataPlotter(tk.Tk):
                     continue
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
-                    ang_deg, val = prepare_angle_value(
-                        self.loaded[sid], angle_col, metric_col, sentinels)
+                    ang_deg, val = prepare_angle_value_agg(
+                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
                     val2, _ = self._apply_value_mode(val, value_mode)
                     base_at = circular_interp_baseline(
                         b_ang_deg, b_val2, ang_deg)
@@ -1460,7 +1483,7 @@ class DashboardDataPlotter(tk.Tk):
             fig.add_scatterpolar(
                 theta=theta_ring, r=r_ring, mode="lines",
                 line=dict(width=2.6, color=baseline_color),
-                name=f"Baseline = 0 ({b_label})")
+                name=b_label)
 
             for sid, (ang_deg2, delta2) in deltas_by_id.items():
                 label = self.id_to_display.get(sid, os.path.basename(sid))
@@ -1536,6 +1559,7 @@ class DashboardDataPlotter(tk.Tk):
         sentinels = parse_sentinels(self.sentinels_var.get())
         close_loop = bool(self.close_loop_var.get())
         value_mode = self.value_mode_var.get()
+        agg_mode = (self.agg_var.get() or "mean").strip().lower()
 
         compare = bool(self.compare_var.get())
         baseline_display = self.baseline_display_var.get().strip()
@@ -1567,13 +1591,13 @@ class DashboardDataPlotter(tk.Tk):
                 return
             if plot_type == "cartesian":
                 self._plot_plotly_cartesian(
-                    angle_col, metric_col, sentinels, value_mode, close_loop,
+                    angle_col, metric_col, sentinels, value_mode, agg_mode, close_loop,
                     compare, baseline_id, baseline_display, fixed_range)
                 self._push_history()
                 return
-            self._plot_plotly_radar(
-                angle_col, metric_col, sentinels, value_mode, close_loop,
-                compare, baseline_id, baseline_display, fixed_range)
+                self._plot_plotly_radar(
+                    angle_col, metric_col, sentinels, value_mode, agg_mode, close_loop,
+                    compare, baseline_id, baseline_display, fixed_range)
             self._push_history()
             return
 
@@ -1621,9 +1645,12 @@ class DashboardDataPlotter(tk.Tk):
                 return
 
             x = np.arange(len(labels))
-            self.ax.axhline(
+            # Reset margins to use full width (no right-side legend for bar plots).
+            self.fig.subplots_adjust(left=0.08, right=0.98)
+            baseline_label = b_label if compare else None
+            baseline_handle = self.ax.axhline(
                 0.0, color=baseline_color if compare else "black",
-                linewidth=1.8 if compare else 1.2)
+                linewidth=1.8 if compare else 1.2, label=baseline_label)
             self.ax.bar(x, heights, color=bar_colors)
             self.ax.set_xticks(x)
             self.ax.set_xticklabels(labels, rotation=45, ha="right")
@@ -1672,6 +1699,7 @@ class DashboardDataPlotter(tk.Tk):
             range_values = []
             color_map = self._dataset_color_map()
             baseline_color = color_map.get(baseline_id, "red")
+            baseline_label = None
 
             if not compare:
                 for sid in self.get_plot_order_source_ids():
@@ -1679,8 +1707,8 @@ class DashboardDataPlotter(tk.Tk):
                         continue
                     label = self.id_to_display.get(sid, os.path.basename(sid))
                     try:
-                        ang_deg, val = prepare_angle_value(
-                            self.loaded[sid], angle_col, metric_col, sentinels)
+                        ang_deg, val = prepare_angle_value_agg(
+                            self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
                         val2, _ = self._apply_value_mode(val, value_mode)
                         m = np.isfinite(ang_deg) & np.isfinite(val2)
                         ang_deg2 = ang_deg[m]
@@ -1705,9 +1733,10 @@ class DashboardDataPlotter(tk.Tk):
             else:
                 b_label = self.id_to_display.get(
                     baseline_id, os.path.basename(baseline_id))
+                baseline_label = b_label
                 try:
-                    b_ang_deg, b_val = prepare_angle_value(
-                        self.loaded[baseline_id], angle_col, metric_col, sentinels)
+                    b_ang_deg, b_val = prepare_angle_value_agg(
+                        self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode)
                     b_val2, _ = self._apply_value_mode(b_val, value_mode)
                 except Exception as e:
                     messagebox.showerror(
@@ -1722,8 +1751,8 @@ class DashboardDataPlotter(tk.Tk):
                     label = self.id_to_display.get(
                         sid, os.path.basename(sid))
                     try:
-                        ang_deg, val = prepare_angle_value(
-                            self.loaded[sid], angle_col, metric_col, sentinels)
+                        ang_deg, val = prepare_angle_value_agg(
+                            self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
                         val2, _ = self._apply_value_mode(val, value_mode)
                         base_at = circular_interp_baseline(
                             b_ang_deg, b_val2, ang_deg)
@@ -1759,14 +1788,27 @@ class DashboardDataPlotter(tk.Tk):
                 self._redraw_empty()
                 return
 
-            self.ax.axhline(
+            baseline_handle = self.ax.axhline(
                 0.0, color=baseline_color if compare else "black",
-                linewidth=1.8 if compare else 1.2)
+                linewidth=1.8 if compare else 1.2, label=baseline_label)
             self.ax.set_xlabel("Crank angle (deg)")
             self.ax.set_xlim(0, 360)
             if plotted:
-                self.ax.legend(loc="upper left", bbox_to_anchor=(
-                    1.02, 1.05), fontsize=9, frameon=False)
+                # Reserve extra space on the right so the legend is fully visible,
+                # and nudge the plot left.
+                self.fig.subplots_adjust(left=0.1, right=0.84)
+                handles, labels = self.ax.get_legend_handles_labels()
+                if compare and baseline_label and baseline_handle and baseline_handle not in handles:
+                    handles.append(baseline_handle)
+                    labels.append(baseline_label)
+                if compare and baseline_label and baseline_handle in handles:
+                    idx = handles.index(baseline_handle)
+                    handles.insert(0, handles.pop(idx))
+                    labels.insert(0, labels.pop(idx))
+                self.ax.legend(
+                    handles, labels,
+                    loc="upper left", bbox_to_anchor=(1.01, 1.02),
+                    fontsize=9, frameon=False)
             if fixed_range:
                 self.ax.set_ylim(fixed_range[0], fixed_range[1])
             elif range_values:
@@ -1813,8 +1855,8 @@ class DashboardDataPlotter(tk.Tk):
                     continue
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
-                    ang_deg, val = prepare_angle_value(
-                        self.loaded[sid], angle_col, metric_col, sentinels)
+                    ang_deg, val = prepare_angle_value_agg(
+                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
                     val2, _ = self._apply_value_mode(val, value_mode)
 
                     theta = np.deg2rad(ang_deg)
@@ -1849,8 +1891,8 @@ class DashboardDataPlotter(tk.Tk):
             b_label = self.id_to_display.get(
                 baseline_id, os.path.basename(baseline_id))
             try:
-                b_ang_deg, b_val = prepare_angle_value(
-                    self.loaded[baseline_id], angle_col, metric_col, sentinels)
+                b_ang_deg, b_val = prepare_angle_value_agg(
+                    self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode)
                 b_val2, _ = self._apply_value_mode(b_val, value_mode)
             except Exception as e:
                 messagebox.showerror(
@@ -1866,8 +1908,8 @@ class DashboardDataPlotter(tk.Tk):
                     continue
                 label = self.id_to_display.get(sid, os.path.basename(sid))
                 try:
-                    ang_deg, val = prepare_angle_value(
-                        self.loaded[sid], angle_col, metric_col, sentinels)
+                    ang_deg, val = prepare_angle_value_agg(
+                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode)
                     val2, _ = self._apply_value_mode(val, value_mode)
                     base_at = circular_interp_baseline(
                         b_ang_deg, b_val2, ang_deg)
@@ -1901,7 +1943,7 @@ class DashboardDataPlotter(tk.Tk):
             theta_ring = np.linspace(0, 2 * np.pi, 361)
             r_ring = np.full_like(theta_ring, offset, dtype=float)
             self.ax.plot(theta_ring, r_ring, linewidth=2.6,
-                         color=baseline_color, label=f"Baseline = 0 ({b_label})")
+                         color=baseline_color, label=b_label)
 
             for sid, (ang_deg2, delta2) in deltas_by_id.items():
                 label = self.id_to_display.get(sid, os.path.basename(sid))

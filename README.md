@@ -20,6 +20,7 @@ and resistant to accidental semantic breakage.
 - Load **multi‑dataset JSON objects** (file‑based or pasted)
 - Paste JSON objects directly into the UI
 - Save all currently loaded datasets into a **single multi‑dataset JSON**
+- Saved files include a `__project_settings__` block with plot/cleaning settings, dataset order, and visibility
 - Rename datasets without changing their identity
 - Toggle dataset visibility (Show / Hide)
 
@@ -144,7 +145,15 @@ dashboard_data_plotter/
   src/dashboard_data_plotter/
     app.py
     ui/
-      app.py
+      tk_app.py
+      streamlit_app.py
+    core/
+      state.py
+      datasets.py
+      cleaning.py
+      plotting.py
+      analysis.py
+      io.py
     data/
       loaders.py
     plotting/
@@ -166,6 +175,16 @@ This will:
 1. Create a virtual environment
 2. Install dependencies
 3. Run the application
+
+---
+
+## Streamlit stub UI (optional)
+
+To run the minimal Streamlit UI for quick radar/bar plotting:
+
+```bat
+streamlit run streamlit_app.py
+```
 
 ---
 

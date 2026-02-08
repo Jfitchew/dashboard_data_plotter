@@ -80,6 +80,7 @@ Agents must follow the rules below.
 - Preserve function signatures
 - Add helpers instead of duplicating logic
 - Update README if behaviour changes
+- Call out key manual checks after changes (2–4 items max) tied to the modified behavior
 - Run through the testing checklist mentally
 
 ---
@@ -98,6 +99,22 @@ After any change, ensure the following still work:
 8. Change baseline
 9. Save All and reload saved file
 10. Build EXE with PyInstaller
+
+---
+
+## 🏗️ Architecture map (current)
+
+### core/
+- `state.py`: ProjectState + plot settings + cleaning/analysis settings
+- `datasets.py`: dataset identity/order/show/hide transitions
+- `plotting.py`: plot preparation for radar/cartesian/bar/time series (no rendering)
+- `io.py`: project save/load + settings apply
+- `cleaning.py`: CleaningSettings (stub for future workflows)
+- `analysis.py`: AnalysisSettings (stub for future workflows)
+
+### ui/
+- `tk_app.py`: Tkinter adapter (rendering + event wiring)
+- `streamlit_app.py`: Streamlit adapter (rendering + event wiring)
 
 If unsure, STOP and ask the user.
 

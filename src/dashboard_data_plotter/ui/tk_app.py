@@ -5,19 +5,47 @@ from dashboard_data_plotter.plotting.helpers import (
     fmt_delta_ticks,
     choose_decimals_from_ticks,
 )
-from dashboard_data_plotter.core.state import ProjectState
+from dashboard_data_plotter.core.state import (
+    ProjectState,
+    set_plot_type,
+    set_metric,
+    set_angle,
+    set_agg_mode,
+    set_value_mode,
+    set_compare,
+    set_baseline,
+    update_cleaning_settings,
+)
+from dashboard_data_plotter.core.datasets import (
+    add_dataset,
+    remove_dataset,
+    rename_dataset as state_rename_dataset,
+    toggle_show_flag,
+    set_all_show_flags,
+    reorder_datasets,
+    ordered_source_ids,
+)
+from dashboard_data_plotter.core.io import (
+    extract_project_settings,
+    apply_project_settings,
+    load_project_from_file,
+    save_project_to_file,
+)
+from dashboard_data_plotter.core.plotting import (
+    prepare_radar_plot,
+    prepare_cartesian_plot,
+    prepare_bar_plot,
+    prepare_timeseries_plot,
+)
 from dashboard_data_plotter.data.loaders import (
     DEFAULT_SENTINELS,
-    load_json_file_datasets,
     extract_named_datasets,
     make_unique_name,
     parse_sentinels,
-    df_to_jsonable_records,
     prepare_angle_value,
     prepare_angle_value_agg,
     aggregate_metric,
     sanitize_numeric,
-    wrap_angle_deg,
     filter_outliers_mad,
 )
 from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
@@ -451,6 +479,99 @@ class DashboardDataPlotter(tk.Tk):
         self._on_outlier_toggle()
         self._add_tooltips()
 
+    def _sync_treeview_from_state(self):
+        for iid in self.files_tree.get_children(""):
+            if iid not in self.state.loaded:
+                self.files_tree.delete(iid)
+        for index, sid in enumerate(ordered_source_ids(self.state)):
+            display = self.state.id_to_display.get(sid, sid)
+            show_txt = "\u2713" if self.state.show_flag.get(sid, True) else ""
+            if not self.files_tree.exists(sid):
+                self.files_tree.insert("", "end", iid=sid, values=(show_txt, display))
+            else:
+                self.files_tree.item(sid, values=(show_txt, display))
+            self.files_tree.move(sid, "", index)
+
+    def _sync_state_settings_from_ui(self):
+        set_plot_type(self.state, self.plot_type_var.get())
+        set_angle(self.state, self.angle_var.get())
+        set_metric(self.state, self.metric_var.get())
+        set_agg_mode(self.state, self._normalize_agg_mode(self.agg_var.get()))
+        set_value_mode(self.state, self.value_mode_var.get())
+        set_compare(self.state, self.compare_var.get())
+        baseline_display = self.baseline_display_var.get().strip()
+        baseline_id = self.state.display_to_id.get(baseline_display, "")
+        set_baseline(self.state, baseline_id if baseline_id in self.state.loaded else "")
+        sentinels = parse_sentinels(self.sentinels_var.get())
+        outlier_threshold = None
+        if self.remove_outliers_var.get():
+            try:
+                outlier_threshold = float(self.outlier_thresh_var.get())
+            except Exception:
+                outlier_threshold = None
+        update_cleaning_settings(
+            self.state,
+            sentinels=sentinels,
+            remove_outliers=self.remove_outliers_var.get(),
+            outlier_threshold=outlier_threshold,
+        )
+
+    def _datasets_from_json_obj(self, obj):
+        datasets = extract_named_datasets(obj)
+        out = []
+        for name, records in datasets:
+            if not isinstance(records, list) or (len(records) > 0 and not isinstance(records[0], dict)):
+                continue
+            df = pd.DataFrame(records)
+            for c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+            out.append((str(name), df))
+        return out
+
+    def _sync_ui_from_state_settings(self):
+        plot = self.state.plot_settings
+        cleaning = self.state.cleaning_settings
+
+        self.plot_type_var.set(plot.plot_type or self.plot_type_var.get())
+        self.angle_var.set(plot.angle_column or self.angle_var.get())
+
+        desired_metric = plot.metric_column or ""
+        self.agg_var.set({
+            "trimmed_mean_10": "10% trimmed mean",
+            "pedal_stroke": "pedal stroke",
+            "roll_360deg": "roll 360deg",
+        }.get(plot.agg_mode, plot.agg_mode or self.agg_var.get()))
+        self.value_mode_var.set(plot.value_mode or self.value_mode_var.get())
+        self.compare_var.set(bool(plot.compare))
+        self.close_loop_var.set(bool(plot.close_loop))
+        self.use_plotly_var.set(bool(plot.use_plotly))
+        self.radar_background_var.set(bool(plot.radar_background))
+        self.range_low_var.set(str(plot.range_low or ""))
+        self.range_high_var.set(str(plot.range_high or ""))
+        self.range_fixed_var.set(bool(plot.range_fixed))
+
+        if cleaning.sentinels:
+            self.sentinels_var.set(", ".join(str(v) for v in cleaning.sentinels))
+        self.remove_outliers_var.set(bool(cleaning.remove_outliers))
+        self.outlier_thresh_var.set("" if cleaning.outlier_threshold is None else str(cleaning.outlier_threshold))
+
+        self.refresh_metric_choices()
+        if desired_metric and desired_metric in self.metric_combo["values"]:
+            self.metric_var.set(desired_metric)
+        self.refresh_baseline_choices()
+
+        baseline_display = ""
+        if plot.baseline_source_id:
+            baseline_display = self.state.id_to_display.get(plot.baseline_source_id, "")
+        if baseline_display:
+            self.baseline_display_var.set(baseline_display)
+
+        self._sync_treeview_from_state()
+        self._on_plot_type_change()
+        self._set_compare_controls_state()
+        self._on_outlier_toggle()
+        self._sync_state_settings_from_ui()
+
     def _build_plot(self):
         right = ttk.Frame(self, padding=10)
         right.grid(row=0, column=1, sticky="nsew")
@@ -786,90 +907,8 @@ class DashboardDataPlotter(tk.Tk):
                 + "\n\nConsider increasing the outlier threshold.",
             )
 
-    def _pedal_stroke_series(self, df: pd.DataFrame, metric_col: str, sentinels, outlier_threshold):
-        if "leftPedalCrankAngle" not in df.columns:
-            raise KeyError("Angle column 'leftPedalCrankAngle' not found.")
-        ang = wrap_angle_deg(
-            sanitize_numeric(df["leftPedalCrankAngle"], sentinels),
-            convert_br_to_standard=True,
-        ).to_numpy(dtype=float)
-        val = sanitize_numeric(df[metric_col], sentinels)
-        if outlier_threshold is not None:
-            val = filter_outliers_mad(val, outlier_threshold)
-        val = val.to_numpy(dtype=float)
-        mask = np.isfinite(ang) & np.isfinite(val)
-        ang = ang[mask]
-        val = val[mask]
-        if ang.size == 0:
-            raise ValueError("No valid values after filtering.")
-
-        stroke_means = []
-        stroke_vals = []
-        start_angle = ang[0]
-        prev = ang[0]
-        wrapped = False
-        for a, v in zip(ang, val):
-            # Track wrap from high angle back to low angle.
-            if prev - a > 180.0:
-                wrapped = True
-            stroke_vals.append(v)
-            # A full stroke completes once we've wrapped and reached start_angle again.
-            if wrapped and a >= start_angle:
-                stroke_means.append(float(np.nanmean(stroke_vals)))
-                stroke_vals = []
-                wrapped = False
-            prev = a
-        # Do not include incomplete last stroke.
-
-        if not stroke_means:
-            raise ValueError("No valid pedal strokes after filtering.")
-        x = np.arange(len(stroke_means), dtype=float)
-        y = np.asarray(stroke_means, dtype=float)
-        return x, y
-
-    def _roll_360_series(self, df: pd.DataFrame, metric_col: str, sentinels, outlier_threshold):
-        if "leftPedalCrankAngle" not in df.columns:
-            raise KeyError("Angle column 'leftPedalCrankAngle' not found.")
-        ang = wrap_angle_deg(
-            sanitize_numeric(df["leftPedalCrankAngle"], sentinels),
-            convert_br_to_standard=True,
-        ).to_numpy(dtype=float)
-        val = sanitize_numeric(df[metric_col], sentinels)
-        if outlier_threshold is not None:
-            val = filter_outliers_mad(val, outlier_threshold)
-        val = val.to_numpy(dtype=float)
-        mask = np.isfinite(ang) & np.isfinite(val)
-        ang = ang[mask]
-        val = val[mask]
-        if ang.size == 0:
-            raise ValueError("No valid values after filtering.")
-
-        out = []
-        n = len(val)
-        for i in range(n):
-            start_ang = ang[i]
-            j = i + 1
-            wrapped = False
-            prev = ang[i]
-            while j < n:
-                a = ang[j]
-                if prev - a > 180.0:
-                    wrapped = True
-                if wrapped and a >= start_ang:
-                    break
-                prev = a
-                j += 1
-            if j >= n:
-                # No complete 360deg window for this point (and likely following points).
-                break
-            window = val[i:j + 1]
-            out.append(float(np.nanmean(window)))
-        if not out:
-            raise ValueError("No complete 360deg windows after filtering.")
-        x = np.arange(len(out), dtype=float)
-        return x, np.asarray(out, dtype=float)
-
     def _snapshot_settings(self):
+        self._sync_state_settings_from_ui()
         return {
             "angle": self.angle_var.get(),
             "metric": self.metric_var.get(),
@@ -926,7 +965,7 @@ class DashboardDataPlotter(tk.Tk):
                 self.state.show_flag[sid] = bool(flag)
                 if self.files_tree.exists(sid):
                     name = self.files_tree.item(sid, "values")[1]
-                    show_txt = "✓" if self.state.show_flag.get(sid, True) else ""
+                    show_txt = "\u2713" if self.state.show_flag.get(sid, True) else ""
                     self.files_tree.item(sid, values=(show_txt, name))
             else:
                 missing.append(sid)
@@ -978,6 +1017,8 @@ class DashboardDataPlotter(tk.Tk):
             if not baseline_id or baseline_id not in self.state.loaded:
                 self.compare_var.set(False)
                 self._set_compare_controls_state()
+
+        self._sync_state_settings_from_ui()
 
         if missing:
             messagebox.showwarning(
@@ -1053,25 +1094,24 @@ class DashboardDataPlotter(tk.Tk):
         self.rename_dataset(row_id)
 
     def toggle_show(self, source_id: str):
-        cur = bool(self.state.show_flag.get(source_id, True))
-        new = not cur
-        self.state.show_flag[source_id] = new
-        show_txt = "✓" if new else ""
+        new = toggle_show_flag(self.state, source_id)
+        show_txt = "\u2713" if new else ""
         if self.files_tree.exists(source_id):
             name = self.files_tree.item(source_id, "values")[1]
             self.files_tree.item(source_id, values=(show_txt, name))
 
     def toggle_all_show(self):
-        items = self.files_tree.get_children("")
+        items = list(ordered_source_ids(self.state))
         if not items:
             return
         any_hidden = any(not self.state.show_flag.get(iid, True) for iid in items)
         new_state = True if any_hidden else False
-        show_txt = "✓" if new_state else ""
+        show_txt = "\u2713" if new_state else ""
+        set_all_show_flags(self.state, new_state, items)
         for iid in items:
-            self.state.show_flag[iid] = new_state
-            name = self.files_tree.item(iid, "values")[1]
-            self.files_tree.item(iid, values=(show_txt, name))
+            if self.files_tree.exists(iid):
+                name = self.files_tree.item(iid, "values")[1]
+                self.files_tree.item(iid, values=(show_txt, name))
 
     def rename_selected(self):
         sel = list(self.files_tree.selection())
@@ -1085,28 +1125,36 @@ class DashboardDataPlotter(tk.Tk):
         sel = list(self.files_tree.selection())
         if not sel:
             return
-        items = list(self.files_tree.get_children(""))
-        selected = [iid for iid in items if iid in sel]
+        order = ordered_source_ids(self.state)
+        selected = [iid for iid in order if iid in sel]
         for iid in selected:
-            index = self.files_tree.index(iid)
-            if index <= 0:
+            idx = order.index(iid)
+            if idx <= 0:
                 continue
-            self.files_tree.move(iid, "", index - 1)
+            if order[idx - 1] in selected:
+                continue
+            order[idx - 1], order[idx] = order[idx], order[idx - 1]
+        reorder_datasets(self.state, order)
+        self._sync_treeview_from_state()
 
     def move_selected_down(self):
         sel = list(self.files_tree.selection())
         if not sel:
             return
-        items = list(self.files_tree.get_children(""))
-        selected = [iid for iid in items if iid in sel]
+        order = ordered_source_ids(self.state)
+        selected = [iid for iid in order if iid in sel]
         for iid in reversed(selected):
-            index = self.files_tree.index(iid)
-            if index >= len(items) - 1:
+            idx = order.index(iid)
+            if idx >= len(order) - 1:
                 continue
-            self.files_tree.move(iid, "", index + 1)
+            if order[idx + 1] in selected:
+                continue
+            order[idx + 1], order[idx] = order[idx], order[idx + 1]
+        reorder_datasets(self.state, order)
+        self._sync_treeview_from_state()
 
     def sort_by_dataset_name(self):
-        items = list(self.files_tree.get_children(""))
+        items = ordered_source_ids(self.state)
         if not items:
             return
         if not hasattr(self, "_dataset_sort_reverse"):
@@ -1114,25 +1162,18 @@ class DashboardDataPlotter(tk.Tk):
         reverse = self._dataset_sort_reverse
         items.sort(
             key=lambda iid: dataset_sort_key(
-                self.files_tree.item(iid, "values")[1]),
+                self.state.id_to_display.get(iid, iid)),
             reverse=reverse,
         )
-        for index, iid in enumerate(items):
-            self.files_tree.move(iid, "", index)
-        arrow = " ▼" if reverse else " ▲"
+        reorder_datasets(self.state, items)
+        self._sync_treeview_from_state()
+        arrow = " \u25bc" if reverse else " \u25b2"
         self.files_tree.heading(
             "name", text="Dataset" + arrow, command=self.sort_by_dataset_name)
         self._dataset_sort_reverse = not reverse
 
     def get_plot_order_source_ids(self):
-        try:
-            ids = [iid for iid in self.files_tree.get_children(
-                "") if iid in self.state.loaded]
-            if ids:
-                return ids
-        except Exception:
-            pass
-        return list(self.state.loaded.keys())
+        return ordered_source_ids(self.state)
 
     def rename_dataset(self, source_id: str):
         old = self.state.id_to_display.get(source_id, source_id)
@@ -1143,30 +1184,19 @@ class DashboardDataPlotter(tk.Tk):
         new_name = new_name.strip()
         if not new_name:
             return
-        if new_name in self.state.display_to_id and self.state.display_to_id[new_name] != source_id:
-            new_name = make_unique_name(
-                new_name, set(self.state.display_to_id.keys()))
-        self.state.id_to_display[source_id] = new_name
-        if old in self.state.display_to_id and self.state.display_to_id[old] == source_id:
-            self.state.display_to_id.pop(old, None)
-        self.state.display_to_id[new_name] = source_id
+        new_name = state_rename_dataset(self.state, source_id, new_name)
         if self.files_tree.exists(source_id):
-            show_txt = "✓" if self.state.show_flag.get(source_id, True) else ""
+            show_txt = "\u2713" if self.state.show_flag.get(source_id, True) else ""
             self.files_tree.item(source_id, values=(show_txt, new_name))
         if self.baseline_display_var.get() == old:
             self.baseline_display_var.set(new_name)
         self.refresh_baseline_choices()
 
     def _register_dataset(self, source_id: str, display: str, df: pd.DataFrame):
-        display = make_unique_name(display, set(self.state.display_to_id.keys()))
+        display = display if display else "Dataset"
         source_id = source_id if source_id else f"PASTE::{display}"
-        self.state.loaded[source_id] = df
-        self.state.id_to_display[source_id] = display
-        self.state.display_to_id[display] = source_id
-        self.state.show_flag[source_id] = True
-        if not self.files_tree.exists(source_id):
-            self.files_tree.insert(
-                "", "end", iid=source_id, values=("✓", display))
+        display = add_dataset(self.state, source_id, display, df)
+        self._sync_treeview_from_state()
         if not self.baseline_display_var.get():
             self.baseline_display_var.set(display)
 
@@ -1198,7 +1228,9 @@ class DashboardDataPlotter(tk.Tk):
         added = 0
         for p in paths:
             try:
-                datasets = load_json_file_datasets(p)
+                datasets, settings = load_project_from_file(p)
+                if not datasets:
+                    raise ValueError("No valid datasets found in JSON file.")
                 base = os.path.splitext(os.path.basename(p))[0]
                 for name, df in datasets:
                     display = base if name == "Dataset" else str(name)
@@ -1208,6 +1240,9 @@ class DashboardDataPlotter(tk.Tk):
                     self._register_dataset(
                         source_id=source_id, display=display, df=df)
                     added += 1
+                if settings:
+                    apply_project_settings(self.state, settings)
+                    self._sync_ui_from_state_settings()
             except Exception as e:
                 log_exception("load data from JSON failed")
                 messagebox.showerror(
@@ -1242,23 +1277,18 @@ class DashboardDataPlotter(tk.Tk):
             return
         try:
             obj = json.loads(raw)
-            datasets = extract_named_datasets(obj)
+            datasets = self._datasets_from_json_obj(obj)
+            settings = extract_project_settings(obj)
         except Exception as e:
             messagebox.showerror("Paste load error",
                                  f"{type(e).__name__}: {e}")
             return
 
         added = 0
-        for name, records in datasets:
-            if not isinstance(records, list) or (len(records) > 0 and not isinstance(records[0], dict)):
-                continue
-            display = make_unique_name(
-                str(name), set(self.state.display_to_id.keys()))
+        for name, df in datasets:
+            display = make_unique_name(str(name), set(self.state.display_to_id.keys()))
             source_id = self._unique_paste_source_id(display)
             try:
-                df = pd.DataFrame(records)
-                for c in df.columns:
-                    df[c] = pd.to_numeric(df[c], errors="coerce")
                 if source_id in self.state.loaded:
                     continue
                 self._register_dataset(
@@ -1278,6 +1308,9 @@ class DashboardDataPlotter(tk.Tk):
         self.refresh_metric_choices()
         self.refresh_baseline_choices()
         self._auto_default_metric()
+        if settings:
+            apply_project_settings(self.state, settings)
+            self._sync_ui_from_state_settings()
 
     def save_pasted_json(self):
         raw = self.paste_text.get("1.0", "end").strip()
@@ -1363,22 +1396,9 @@ class DashboardDataPlotter(tk.Tk):
         )
         if not out_path:
             return
-        ids = self.get_plot_order_source_ids()
-        for sid in self.state.loaded.keys():
-            if sid not in ids:
-                ids.append(sid)
-        items = [(self.state.id_to_display.get(sid, sid), sid) for sid in ids]
-        payload = {}
-        existing = set()
-        for disp, sid in items:
-            name = make_unique_name(disp, existing)
-            existing.add(name)
-            df = self.state.loaded[sid]
-            payload[name] = {"rideData": df_to_jsonable_records(df)}
         try:
-            with open(out_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2)
-            self.status.set(f"Saved {len(payload)} dataset(s) to: {out_path}")
+            save_project_to_file(self.state, out_path)
+            self.status.set(f"Saved {len(self.state.loaded)} dataset(s) to: {out_path}")
         except Exception as e:
             log_exception("save_all_datasets failed")
             messagebox.showerror(
@@ -1390,13 +1410,8 @@ class DashboardDataPlotter(tk.Tk):
         if not sel:
             return
         for source_id in sel:
-            if self.files_tree.exists(source_id):
-                self.files_tree.delete(source_id)
-            disp = self.state.id_to_display.pop(source_id, None)
-            if disp is not None:
-                self.state.display_to_id.pop(disp, None)
-            self.state.loaded.pop(source_id, None)
-            self.state.show_flag.pop(source_id, None)
+            remove_dataset(self.state, source_id)
+        self._sync_treeview_from_state()
         self.refresh_metric_choices()
         self.refresh_baseline_choices()
         self.status.set(f"Total loaded: {len(self.state.loaded)}")
@@ -1412,14 +1427,7 @@ class DashboardDataPlotter(tk.Tk):
         self.status.set("Cleared all data sources.")
         self._redraw_empty()
 
-    # ---------------- Plotting ----------------
-    def _apply_value_mode(self, values: np.ndarray, mode: str):
-        if mode == "absolute":
-            return np.asarray(values, dtype=float), "absolute"
-        if mode == "percent_mean":
-            return to_percent_of_mean(values), "% of mean"
-        raise ValueError(f"Unknown value mode: {mode}")
-
+    # ---------------- Plotting ----------------    # ---------------- Plotting ----------------
     def _open_plotly_figure(self, fig: go.Figure, title: str):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as handle:
             out_path = handle.name
@@ -1433,57 +1441,42 @@ class DashboardDataPlotter(tk.Tk):
                          compare, baseline_id, baseline_display, fixed_range):
         color_map = self._dataset_color_map()
         baseline_color = color_map.get(baseline_id, "red")
-        ordered = []
-        for sid in self.get_plot_order_source_ids():
-            if compare and sid == baseline_id:
-                ordered.append(sid)
-            elif self.state.show_flag.get(sid, True):
-                ordered.append(sid)
-        if compare and baseline_id and baseline_id not in ordered:
-            ordered.append(baseline_id)
+        try:
+            data = prepare_bar_plot(
+                self.state,
+                metric_col=metric_col,
+                agg_mode=agg_mode,
+                value_mode=value_mode,
+                compare=compare,
+                baseline_id=baseline_id,
+                sentinels=sentinels,
+                outlier_threshold=outlier_threshold,
+            )
+        except Exception as e:
+            messagebox.showerror("Bar plot error", str(e))
+            return
 
-        baseline_mean = 0.0
-        if compare:
-            baseline_mean = aggregate_metric(
-                self.state.loaded[baseline_id][metric_col], sentinels, agg_mode, outlier_threshold)
-
-        labels, heights, errors, bar_colors = [], [], [], []
-        for sid in ordered:
-            label = self.state.id_to_display.get(sid, os.path.basename(sid))
-            try:
-                mval = aggregate_metric(
-                    self.state.loaded[sid][metric_col], sentinels, agg_mode, outlier_threshold)
-                heights.append(0.0 if compare and sid == baseline_id else (
-                    mval - baseline_mean if compare else mval))
-                labels.append(label)
-                bar_colors.append(color_map.get(sid, "#1f77b4"))
-            except Exception as e:
-                errors.append(f"{label}: {e}")
-
-        if not labels:
+        if not data.labels:
             messagebox.showinfo("Nothing to plot",
                                 "No datasets produced valid bar values.")
             return
-        range_minmax = self._minmax_from_values(heights)
+
+        range_minmax = self._minmax_from_values(data.values)
         if range_minmax:
             self._update_range_entries(*range_minmax)
 
-        agg_label = {
-            "mean": "Mean",
-            "median": "Median",
-            "trimmed_mean_10": "10% trimmed mean",
-        }.get(str(agg_mode).lower(), "Mean")
-        mode_str = "absolute" if value_mode == "absolute" else "% of mean"
-        if compare:
-            b_label = self.state.id_to_display.get(baseline_id, baseline_display)
-            title = f"{agg_label} {metric_col} difference vs baseline {b_label} ({mode_str})"
+        mode_str = data.mode_label
+        if data.compare:
+            b_label = data.baseline_label or self.state.id_to_display.get(baseline_id, baseline_display)
+            title = f"{data.agg_label} {metric_col} difference vs baseline {b_label} ({mode_str})"
             y_title = "Difference vs baseline"
         else:
-            title = f"{agg_label} {metric_col} per dataset ({mode_str})"
+            title = f"{data.agg_label} {metric_col} per dataset ({mode_str})"
             y_title = metric_col
 
+        bar_colors = [color_map.get(self.state.display_to_id.get(label, ""), "#1f77b4") for label in data.labels]
         fig = go.Figure()
-        fig.add_bar(x=labels, y=heights, marker_color=bar_colors)
+        fig.add_bar(x=data.labels, y=data.values, marker_color=bar_colors)
         fig.update_layout(
             title=title,
             xaxis_title="Dataset",
@@ -1492,137 +1485,59 @@ class DashboardDataPlotter(tk.Tk):
         )
         if fixed_range:
             fig.update_yaxes(range=[fixed_range[0], fixed_range[1]])
-        fig.add_shape(type="line", x0=-0.5, x1=max(len(labels) - 0.5, 0.5),
+        fig.add_shape(type="line", x0=-0.5, x1=max(len(data.labels) - 0.5, 0.5),
                       y0=0, y1=0,
                       line=dict(color=baseline_color if compare else "black", width=1.8 if compare else 1.2))
 
-        self._open_plotly_figure(fig, f"Plotted {len(labels)} bar(s).")
-        if errors:
+        self._open_plotly_figure(fig, f"Plotted {len(data.labels)} bar(s).")
+        if data.errors:
             messagebox.showwarning(
-                "Partial plot", f"Plotted {len(labels)} bar(s) with errors.\n\n" + "\n".join(errors))
+                "Partial plot", f"Plotted {len(data.labels)} bar(s) with errors.\n\n" + "\n".join(data.errors))
 
     def _plot_plotly_timeseries(self, metric_col, sentinels, value_mode, agg_mode, outlier_threshold,
                                 compare, baseline_id, baseline_display, fixed_range):
-        plotted, errors = 0, []
-        fig = go.Figure()
-        range_values = []
-        max_t = 0.0
         color_map = self._dataset_color_map()
         baseline_color = color_map.get(baseline_id, "red")
 
-        b_label = None
-        b_val2 = None
-        b_strokes = None
-        b_roll = None
-        if compare:
-            b_label = self.state.id_to_display.get(
-                baseline_id, os.path.basename(baseline_id))
-            if agg_mode == "pedal_stroke":
-                _, b_vals = self._pedal_stroke_series(
-                    self.state.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
-                b_val2, _ = self._apply_value_mode(b_vals, value_mode)
-                b_strokes = b_val2
-            elif agg_mode == "roll_360deg":
-                _, b_vals = self._roll_360_series(
-                    self.state.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
-                b_val2, _ = self._apply_value_mode(b_vals, value_mode)
-                b_roll = b_val2
-            else:
-                b_vals = sanitize_numeric(
-                    self.state.loaded[baseline_id][metric_col], sentinels)
-                if outlier_threshold is not None:
-                    b_vals = filter_outliers_mad(b_vals, outlier_threshold)
-                b_val2, _ = self._apply_value_mode(
-                    b_vals.to_numpy(dtype=float), value_mode)
+        try:
+            data = prepare_timeseries_plot(
+                self.state,
+                metric_col=metric_col,
+                agg_mode=agg_mode,
+                value_mode=value_mode,
+                compare=compare,
+                baseline_id=baseline_id,
+                sentinels=sentinels,
+                outlier_threshold=outlier_threshold,
+            )
+        except Exception as e:
+            messagebox.showerror("Time series error", str(e))
+            return
 
-        for sid in self.get_plot_order_source_ids():
-            if not self.state.show_flag.get(sid, True):
-                continue
-            if compare and sid == baseline_id:
-                continue
-            label = self.state.id_to_display.get(sid, os.path.basename(sid))
-            try:
-                if agg_mode == "pedal_stroke":
-                    t, vals = self._pedal_stroke_series(
-                        self.state.loaded[sid], metric_col, sentinels, outlier_threshold)
-                    val2, _ = self._apply_value_mode(vals, value_mode)
-                    if compare:
-                        if b_strokes is None:
-                            raise ValueError("Baseline data missing.")
-                        min_len = min(len(val2), len(b_strokes))
-                        if min_len == 0:
-                            raise ValueError(
-                                "No valid values after filtering.")
-                        y = val2[:min_len] - b_strokes[:min_len]
-                        t = t[:min_len]
-                    else:
-                        y = val2
-                elif agg_mode == "roll_360deg":
-                    t, vals = self._roll_360_series(
-                        self.state.loaded[sid], metric_col, sentinels, outlier_threshold)
-                    val2, _ = self._apply_value_mode(vals, value_mode)
-                    if compare:
-                        if b_roll is None:
-                            raise ValueError("Baseline data missing.")
-                        min_len = min(len(val2), len(b_roll))
-                        if min_len == 0:
-                            raise ValueError(
-                                "No valid values after filtering.")
-                        y = val2[:min_len] - b_roll[:min_len]
-                        t = t[:min_len]
-                    else:
-                        y = val2
-                else:
-                    vals = sanitize_numeric(
-                        self.state.loaded[sid][metric_col], sentinels)
-                    if outlier_threshold is not None:
-                        vals = filter_outliers_mad(vals, outlier_threshold)
-                    val2, _ = self._apply_value_mode(
-                        vals.to_numpy(dtype=float), value_mode)
-                    if compare:
-                        min_len = min(len(val2), len(b_val2))
-                        if min_len == 0:
-                            raise ValueError(
-                                "No valid values after filtering.")
-                        delta = val2[:min_len] - b_val2[:min_len]
-                        t = np.arange(min_len, dtype=float) / 100.0
-                        y = delta
-                    else:
-                        t = np.arange(len(val2), dtype=float) / 100.0
-                        y = val2
-                m = np.isfinite(t) & np.isfinite(y)
-                t = t[m]
-                y = y[m]
-                if len(t) == 0:
-                    raise ValueError("No valid values after filtering.")
-                color = color_map.get(sid)
-                if len(t):
-                    max_t = max(max_t, float(np.nanmax(t)))
-                fig.add_scatter(
-                    x=t, y=y, mode="lines+markers", name=label,
-                    marker=dict(size=3, color=color), line=dict(color=color, width=1.3))
-                range_values.append(y)
-                plotted += 1
-            except Exception as e:
-                errors.append(f"{label}: {e}")
-
-        if plotted == 0:
+        if not data.traces:
             messagebox.showinfo(
                 "Nothing to plot", "No datasets produced valid time series values.")
             return
 
-        mode_str = "absolute" if value_mode == "absolute" else "% of mean"
+        fig = go.Figure()
+        range_values = []
+        for trace in data.traces:
+            color = color_map.get(trace.source_id, "#1f77b4")
+            fig.add_scatter(
+                x=trace.x, y=trace.y, mode="lines+markers", name=trace.label,
+                marker=dict(size=3, color=color), line=dict(color=color, width=1.3))
+            range_values.append(trace.y)
+
+        mode_str = data.mode_label
         if agg_mode == "pedal_stroke":
             base_title = f"Pedal stroke {metric_col} ({mode_str})"
-            x_title = "Pedal stroke #"
         elif agg_mode == "roll_360deg":
             base_title = f"Roll 360deg {metric_col} ({mode_str})"
-            x_title = "Record #"
         else:
             base_title = f"Time series {metric_col} ({mode_str})"
-            x_title = "Time (s)"
-        if compare and b_label:
-            title = f"{base_title} difference to Baseline ({b_label})"
+
+        if data.compare and data.baseline_label:
+            title = f"{base_title} difference to Baseline ({data.baseline_label})"
             y_title = "Difference vs baseline"
         else:
             title = base_title
@@ -1634,132 +1549,73 @@ class DashboardDataPlotter(tk.Tk):
             if range_minmax:
                 self._update_range_entries(*range_minmax)
 
-        if compare and b_label:
+        if data.compare and data.baseline_label:
             fig.add_scatter(
-                x=[0, max_t], y=[0, 0], mode="lines", name=b_label,
+                x=[0, data.max_x], y=[0, 0], mode="lines", name=data.baseline_label,
                 line=dict(color=baseline_color, width=1.6), showlegend=True)
+
         fig.update_layout(
             title=title,
-            xaxis_title=x_title,
+            xaxis_title=data.x_label,
             yaxis_title=y_title,
             showlegend=True,
         )
         if fixed_range:
             fig.update_yaxes(range=[fixed_range[0], fixed_range[1]])
 
-        self._open_plotly_figure(fig, f"Plotted {plotted} trace(s).")
-        if errors:
+        self._open_plotly_figure(fig, f"Plotted {len(data.traces)} trace(s).")
+        if data.errors:
             messagebox.showwarning(
-                "Partial plot", f"Plotted {plotted} trace(s) with errors.\n\n" + "\n".join(errors))
+                "Partial plot", f"Plotted {len(data.traces)} trace(s) with errors.\n\n" + "\n".join(data.errors))
 
     def _plot_plotly_cartesian(self, angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
                                compare, baseline_id, baseline_display, fixed_range):
-        plotted, errors = 0, []
         fig = go.Figure()
         self._apply_cartesian_background_plotly(fig)
-        range_values = []
         color_map = self._dataset_color_map()
         baseline_color = color_map.get(baseline_id, "red")
 
-        agg_label = {
-            "mean": "Mean",
-            "median": "Median",
-            "trimmed_mean_10": "10% trimmed mean",
-        }.get(str(agg_mode).lower(), "Mean")
+        try:
+            data = prepare_cartesian_plot(
+                self.state,
+                angle_col=angle_col,
+                metric_col=metric_col,
+                agg_mode=agg_mode,
+                value_mode=value_mode,
+                compare=compare,
+                baseline_id=baseline_id,
+                sentinels=sentinels,
+                outlier_threshold=outlier_threshold,
+                close_loop=close_loop,
+            )
+        except Exception as e:
+            messagebox.showerror("Cartesian plot error", str(e))
+            return
 
-        agg_label = {
-            "mean": "Mean",
-            "median": "Median",
-            "trimmed_mean_10": "10% trimmed mean",
-        }.get(str(agg_mode).lower(), "Mean")
-
-        if not compare:
-            for sid in self.get_plot_order_source_ids():
-                if not self.state.show_flag.get(sid, True):
-                    continue
-                label = self.state.id_to_display.get(sid, os.path.basename(sid))
-                try:
-                    ang_deg, val = prepare_angle_value_agg(
-                        self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
-                    val2, _ = self._apply_value_mode(val, value_mode)
-                    m = np.isfinite(ang_deg) & np.isfinite(val2)
-                    ang_deg2 = ang_deg[m]
-                    val2 = val2[m]
-                    if len(ang_deg2) == 0:
-                        raise ValueError(
-                            "No valid values after filtering.")
-                    if close_loop and len(ang_deg2) > 2:
-                        ang_deg2 = np.concatenate([ang_deg2, [360.0]])
-                        val2 = np.concatenate([val2, [val2[0]]])
-                    color = color_map.get(sid)
-                    fig.add_scatter(
-                        x=ang_deg2, y=val2, mode="lines+markers", name=label,
-                        marker=dict(size=4, color=color), line=dict(color=color, width=1.5))
-                    range_values.append(val2)
-                    plotted += 1
-                except Exception as e:
-                    errors.append(f"{label}: {e}")
-
-            mode_str = "absolute" if value_mode == "absolute" else "% of mean"
-            title = f"{agg_label} {metric_col} ({mode_str})"
-            y_title = metric_col
-        else:
-            b_label = self.state.id_to_display.get(
-                baseline_id, os.path.basename(baseline_id))
-            fig.add_scatter(
-                x=[0, 360], y=[0, 0], mode="lines", name=b_label,
-                line=dict(color=baseline_color, width=1.8), showlegend=True)
-            try:
-                b_ang_deg, b_val = prepare_angle_value_agg(
-                    self.state.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
-                b_val2, _ = self._apply_value_mode(b_val, value_mode)
-            except Exception as e:
-                messagebox.showerror(
-                    "Baseline error", f"Baseline '{b_label}' failed:\n{e}")
-                return
-
-            for sid in self.get_plot_order_source_ids():
-                if not self.state.show_flag.get(sid, True):
-                    continue
-                if sid == baseline_id:
-                    continue
-                label = self.state.id_to_display.get(sid, os.path.basename(sid))
-                try:
-                    ang_deg, val = prepare_angle_value_agg(
-                        self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
-                    val2, _ = self._apply_value_mode(val, value_mode)
-                    base_at = circular_interp_baseline(
-                        b_ang_deg, b_val2, ang_deg)
-                    delta = val2 - base_at
-                    m = np.isfinite(delta) & np.isfinite(ang_deg)
-                    ang_deg2 = ang_deg[m]
-                    delta2 = delta[m]
-                    if len(ang_deg2) == 0:
-                        raise ValueError(
-                            "No valid comparison values after filtering.")
-                    order = np.argsort(ang_deg2)
-                    ang_deg2 = ang_deg2[order]
-                    delta2 = delta2[order]
-                    if close_loop and len(ang_deg2) > 2:
-                        ang_deg2 = np.concatenate([ang_deg2, [360.0]])
-                        delta2 = np.concatenate([delta2, [delta2[0]]])
-                    color = color_map.get(sid)
-                    fig.add_scatter(
-                        x=ang_deg2, y=delta2, mode="lines+markers", name=label,
-                        marker=dict(size=4, color=color), line=dict(color=color, width=1.5))
-                    range_values.append(delta2)
-                    plotted += 1
-                except Exception as e:
-                    errors.append(f"{label}: {e}")
-
-            mode_str = "absolute" if value_mode == "absolute" else "% of mean"
-            title = f"{agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})"
-            y_title = "Difference vs baseline"
-
-        if plotted == 0:
+        if not data.traces:
             messagebox.showinfo(
                 "Nothing to plot", "No datasets produced valid cartesian values.")
             return
+
+        range_values = []
+        for trace in data.traces:
+            color = color_map.get(trace.source_id, "#1f77b4")
+            fig.add_scatter(
+                x=trace.x, y=trace.y, mode="lines+markers", name=trace.label,
+                marker=dict(size=4, color=color), line=dict(color=color, width=1.5))
+            range_values.append(trace.y)
+
+        mode_str = data.mode_label
+        if data.compare:
+            b_label = data.baseline_label or self.state.id_to_display.get(baseline_id, baseline_display)
+            fig.add_scatter(
+                x=[0, 360], y=[0, 0], mode="lines", name=b_label,
+                line=dict(color=baseline_color, width=1.8), showlegend=True)
+            title = f"{data.agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})"
+            y_title = "Difference vs baseline"
+        else:
+            title = f"{data.agg_label} {metric_col} ({mode_str})"
+            y_title = metric_col
 
         if range_values:
             range_minmax = self._minmax_from_values(
@@ -1767,214 +1623,81 @@ class DashboardDataPlotter(tk.Tk):
             if range_minmax:
                 self._update_range_entries(*range_minmax)
 
-        if not compare:
-            fig.add_shape(
-                type="line", x0=0, x1=360, y0=0, y1=0,
-                line=dict(color="black", width=1.2))
-
         fig.update_layout(
             title=title,
             xaxis_title="Crank angle (deg)",
             yaxis_title=y_title,
-            xaxis=dict(range=[0, 360]),
             showlegend=True,
         )
         if fixed_range:
             fig.update_yaxes(range=[fixed_range[0], fixed_range[1]])
 
-        self._open_plotly_figure(fig, f"Plotted {plotted} trace(s).")
-        if errors:
+        self._open_plotly_figure(fig, f"Plotted {len(data.traces)} trace(s).")
+        if data.errors:
             messagebox.showwarning(
-                "Partial plot", f"Plotted {plotted} trace(s) with errors.\n\n" + "\n".join(errors))
+                "Partial plot", f"Plotted {len(data.traces)} trace(s) with errors.\n\n" + "\n".join(data.errors))
 
     def _plot_plotly_radar(self, angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
                            compare, baseline_id, baseline_display, fixed_range):
-        plotted, errors = 0, []
         fig = go.Figure()
-        bg_applied = self._apply_radar_background_plotly(fig)
+        self._apply_radar_background_plotly(fig)
         color_map = self._dataset_color_map()
         baseline_color = color_map.get(baseline_id, "red")
 
-        if not compare:
-            range_values = []
-            for sid in self.get_plot_order_source_ids():
-                if not self.state.show_flag.get(sid, True):
-                    continue
-                label = self.state.id_to_display.get(sid, os.path.basename(sid))
-                try:
-                    ang_deg, val = prepare_angle_value_agg(
-                        self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
-                    val2, _ = self._apply_value_mode(val, value_mode)
-                    theta = np.asarray(ang_deg, dtype=float)
-                    r = np.asarray(val2, dtype=float)
-                    if close_loop and len(theta) > 2:
-                        theta = np.concatenate([theta, [theta[0]]])
-                        r = np.concatenate([r, [r[0]]])
-                    color = color_map.get(sid)
-                    fig.add_scatterpolar(
-                        theta=theta, r=r, mode="lines+markers", name=label,
-                        marker=dict(size=4, color=color), line=dict(color=color, width=1.5))
-                    range_values.append(val2)
-                    plotted += 1
-                except Exception as e:
-                    errors.append(f"{label}: {e}")
-
-            if range_values:
-                range_minmax = self._minmax_from_values(
-                    np.concatenate(range_values))
-                if range_minmax:
-                    self._update_range_entries(*range_minmax)
-
-            mode_str = "absolute" if value_mode == "absolute" else "% of mean"
-            polar_layout = dict(
-                angularaxis=dict(
-                    direction="clockwise",
-                    rotation=90,
-                    showgrid=True,
-                    showline=True,
-                ),
-                radialaxis=dict(showgrid=True, showline=True),
+        try:
+            data = prepare_radar_plot(
+                self.state,
+                angle_col=angle_col,
+                metric_col=metric_col,
+                agg_mode=agg_mode,
+                value_mode=value_mode,
+                compare=compare,
+                baseline_id=baseline_id,
+                sentinels=sentinels,
+                outlier_threshold=outlier_threshold,
+                close_loop=close_loop,
             )
-            if bg_applied:
-                polar_layout["bgcolor"] = "rgba(0,0,0,0)"
-                polar_layout["angularaxis"]["gridcolor"] = "#A5A5A5"
-                polar_layout["angularaxis"]["linecolor"] = "#A5A5A5"
-                polar_layout["radialaxis"]["gridcolor"] = "#A5A5A5"
-                polar_layout["radialaxis"]["linecolor"] = "#797979"
-            fig.update_layout(
-                title=f"{agg_label} {metric_col} ({mode_str})",
-                polar=polar_layout,
-                showlegend=True,
-            )
-            if fixed_range:
-                fig.update_layout(
-                    polar=dict(radialaxis=dict(range=[fixed_range[0], fixed_range[1]])))
-        else:
-            b_label = self.state.id_to_display.get(
-                baseline_id, os.path.basename(baseline_id))
-            try:
-                b_ang_deg, b_val = prepare_angle_value_agg(
-                    self.state.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
-                b_val2, _ = self._apply_value_mode(b_val, value_mode)
-            except Exception as e:
-                messagebox.showerror(
-                    "Baseline error", f"Baseline '{b_label}' failed:\n{e}")
-                return
+        except Exception as e:
+            messagebox.showerror("Radar plot error", str(e))
+            return
 
-            deltas_by_id = {}
-            max_abs = 0.0
-            range_values = []
-
-            for sid in self.get_plot_order_source_ids():
-                if not self.state.show_flag.get(sid, True):
-                    continue
-                if sid == baseline_id:
-                    continue
-                label = self.state.id_to_display.get(sid, os.path.basename(sid))
-                try:
-                    ang_deg, val = prepare_angle_value_agg(
-                        self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
-                    val2, _ = self._apply_value_mode(val, value_mode)
-                    base_at = circular_interp_baseline(
-                        b_ang_deg, b_val2, ang_deg)
-                    delta = val2 - base_at
-                    m = np.isfinite(delta) & np.isfinite(ang_deg)
-                    ang_deg2 = ang_deg[m]
-                    delta2 = delta[m]
-                    if len(ang_deg2) == 0:
-                        raise ValueError(
-                            "No valid comparison values after filtering.")
-                    order = np.argsort(ang_deg2)
-                    ang_deg2 = ang_deg2[order]
-                    delta2 = delta2[order]
-                    deltas_by_id[sid] = (ang_deg2, delta2)
-                    range_values.append(delta2)
-                    this_max = float(np.nanmax(np.abs(delta2)))
-                    if np.isfinite(this_max):
-                        max_abs = max(max_abs, this_max)
-                except Exception as e:
-                    errors.append(f"{label}: {e}")
-
-            if not deltas_by_id:
-                messagebox.showinfo(
-                    "Nothing to plot", "No non-baseline datasets produced valid comparison traces.")
-                return
-
-            if max_abs <= 0 or not np.isfinite(max_abs):
-                max_abs = 1.0
-            offset = 1.10 * max_abs
-
-            if range_values:
-                range_minmax = self._minmax_from_values(
-                    np.concatenate(range_values))
-                if range_minmax:
-                    self._update_range_entries(*range_minmax)
-
-            theta_ring = np.linspace(0, 360, 361)
-            r_ring = np.full_like(theta_ring, offset, dtype=float)
-            fig.add_scatterpolar(
-                theta=theta_ring, r=r_ring, mode="lines",
-                line=dict(width=2.6, color=baseline_color),
-                name=b_label)
-
-            for sid, (ang_deg2, delta2) in deltas_by_id.items():
-                label = self.state.id_to_display.get(sid, os.path.basename(sid))
-                theta = np.asarray(ang_deg2, dtype=float)
-                r = np.asarray(delta2 + offset, dtype=float)
-                if close_loop and len(theta) > 2:
-                    theta = np.concatenate([theta, [theta[0]]])
-                    r = np.concatenate([r, [r[0]]])
-                color = color_map.get(sid)
-                fig.add_scatterpolar(
-                    theta=theta, r=r, mode="lines+markers", name=label,
-                    marker=dict(size=4, color=color), line=dict(color=color, width=1.5))
-                plotted += 1
-
-            tick_vals = np.linspace(-max_abs, max_abs, 5)
-            decimals = choose_decimals_from_ticks(tick_vals)
-            tick_text = [f"{v:.{decimals}f}" for v in tick_vals]
-            tick_positions = tick_vals + offset
-
-            mode_str = "absolute" if value_mode == "absolute" else "% of mean"
-            radialaxis = dict(
-                tickvals=tick_positions,
-                ticktext=tick_text,
-                showgrid=True,
-                showline=True,
-            )
-            if fixed_range:
-                radialaxis["range"] = [offset + fixed_range[0],
-                                       offset + fixed_range[1]]
-            polar_layout = dict(
-                angularaxis=dict(
-                    direction="clockwise",
-                    rotation=90,
-                    showgrid=True,
-                    showline=True,
-                ),
-                radialaxis=radialaxis,
-            )
-            if bg_applied:
-                polar_layout["bgcolor"] = "rgba(0,0,0,0)"
-                polar_layout["angularaxis"]["gridcolor"] = "#A5A5A5"
-                polar_layout["angularaxis"]["linecolor"] = "#A5A5A5"
-                polar_layout["radialaxis"]["gridcolor"] = "#A5A5A5"
-                polar_layout["radialaxis"]["linecolor"] = "#797979"
-            fig.update_layout(
-                title=f"{agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})",
-                polar=polar_layout,
-                showlegend=True,
-            )
-
-        if plotted == 0:
+        if not data.traces:
             messagebox.showinfo(
                 "Nothing to plot", "No datasets produced valid radar values.")
             return
 
-        self._open_plotly_figure(fig, f"Plotted {plotted} trace(s).")
-        if errors:
+        for trace in data.traces:
+            color = color_map.get(trace.source_id, "#1f77b4")
+            fig.add_scatterpolar(
+                r=trace.y,
+                theta=trace.x,
+                mode="lines+markers",
+                name=trace.label,
+                marker=dict(size=4, color=color),
+                line=dict(color=color, width=1.5),
+            )
+
+        mode_str = data.mode_label
+        if data.compare:
+            b_label = data.baseline_label or self.state.id_to_display.get(baseline_id, baseline_display)
+            title = f"{data.agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})"
+        else:
+            title = f"{data.agg_label} {metric_col} ({mode_str})"
+
+        fig.update_layout(
+            title=title,
+            showlegend=True,
+            polar=dict(
+                angularaxis=dict(direction="clockwise", rotation=90),
+            ),
+        )
+        if fixed_range:
+            fig.update_polars(radialaxis=dict(range=[fixed_range[0], fixed_range[1]]))
+
+        self._open_plotly_figure(fig, f"Plotted {len(data.traces)} trace(s).")
+        if data.errors:
             messagebox.showwarning(
-                "Partial plot", f"Plotted {plotted} trace(s) with errors.\n\n" + "\n".join(errors))
+                "Partial plot", f"Plotted {len(data.traces)} trace(s) with errors.\n\n" + "\n".join(data.errors))
 
     def plot(self):
         if not self.state.loaded:
@@ -1987,6 +1710,8 @@ class DashboardDataPlotter(tk.Tk):
         if not metric_col:
             messagebox.showinfo("Missing selection", "Select a metric column.")
             return
+
+        self._sync_state_settings_from_ui()
 
         sentinels = parse_sentinels(self.sentinels_var.get())
         close_loop = bool(self.close_loop_var.get())
@@ -2053,9 +1778,9 @@ class DashboardDataPlotter(tk.Tk):
                 self._warn_outlier_removal_rate(
                     plot_type, metric_col, sentinels, compare, baseline_id, outlier_threshold)
                 return
-                self._plot_plotly_radar(
-                    angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
-                    compare, baseline_id, baseline_display, fixed_range)
+            self._plot_plotly_radar(
+                angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
+                compare, baseline_id, baseline_display, fixed_range)
             self._push_history()
             self._warn_outliers_if_needed(
                 plot_type, metric_col, sentinels, compare, baseline_id)
@@ -2069,162 +1794,78 @@ class DashboardDataPlotter(tk.Tk):
             self.ax = self.fig.add_subplot(111)
             self.ax.clear()
 
-            plotted, errors = 0, []
-            range_values = []
             color_map = self._dataset_color_map()
             baseline_color = color_map.get(baseline_id, "red")
 
-            b_label = None
-            b_val2 = None
-            b_strokes = None
-            b_roll = None
-            if compare:
-                b_label = self.state.id_to_display.get(
-                    baseline_id, os.path.basename(baseline_id))
-                if agg_mode == "pedal_stroke":
-                    _, b_vals = self._pedal_stroke_series(
-                        self.state.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
-                    b_val2, _ = self._apply_value_mode(b_vals, value_mode)
-                    b_strokes = b_val2
-                elif agg_mode == "roll_360deg":
-                    _, b_vals = self._roll_360_series(
-                        self.state.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
-                    b_val2, _ = self._apply_value_mode(b_vals, value_mode)
-                    b_roll = b_val2
-                else:
-                    b_vals = sanitize_numeric(
-                        self.state.loaded[baseline_id][metric_col], sentinels)
-                    if outlier_threshold is not None:
-                        b_vals = filter_outliers_mad(b_vals, outlier_threshold)
-                    b_val2, _ = self._apply_value_mode(
-                        b_vals.to_numpy(dtype=float), value_mode)
-
-            for sid in self.get_plot_order_source_ids():
-                if not self.state.show_flag.get(sid, True):
-                    continue
-                if compare and sid == baseline_id:
-                    continue
-                label = self.state.id_to_display.get(sid, os.path.basename(sid))
-                try:
-                    if agg_mode == "pedal_stroke":
-                        t, vals = self._pedal_stroke_series(
-                            self.state.loaded[sid], metric_col, sentinels, outlier_threshold)
-                        val2, _ = self._apply_value_mode(vals, value_mode)
-                        if compare:
-                            if b_strokes is None:
-                                raise ValueError("Baseline data missing.")
-                            min_len = min(len(val2), len(b_strokes))
-                            if min_len == 0:
-                                raise ValueError(
-                                    "No valid values after filtering.")
-                            y = val2[:min_len] - b_strokes[:min_len]
-                            t = t[:min_len]
-                        else:
-                            y = val2
-                    elif agg_mode == "roll_360deg":
-                        t, vals = self._roll_360_series(
-                            self.state.loaded[sid], metric_col, sentinels, outlier_threshold)
-                        val2, _ = self._apply_value_mode(vals, value_mode)
-                        if compare:
-                            if b_roll is None:
-                                raise ValueError("Baseline data missing.")
-                            min_len = min(len(val2), len(b_roll))
-                            if min_len == 0:
-                                raise ValueError(
-                                    "No valid values after filtering.")
-                            y = val2[:min_len] - b_roll[:min_len]
-                            t = t[:min_len]
-                        else:
-                            y = val2
-                    else:
-                        vals = sanitize_numeric(
-                            self.state.loaded[sid][metric_col], sentinels)
-                        if outlier_threshold is not None:
-                            vals = filter_outliers_mad(vals, outlier_threshold)
-                        val2, _ = self._apply_value_mode(
-                            vals.to_numpy(dtype=float), value_mode)
-                        if compare:
-                            min_len = min(len(val2), len(b_val2))
-                            if min_len == 0:
-                                raise ValueError(
-                                    "No valid values after filtering.")
-                            delta = val2[:min_len] - b_val2[:min_len]
-                            t = np.arange(min_len, dtype=float) / 100.0
-                            y = delta
-                        else:
-                            t = np.arange(len(val2), dtype=float) / 100.0
-                            y = val2
-                    m = np.isfinite(t) & np.isfinite(y)
-                    t = t[m]
-                    y = y[m]
-                    if len(t) == 0:
-                        raise ValueError("No valid values after filtering.")
-                    color = color_map.get(sid)
-                    self.ax.plot(
-                        t, y, marker="o", markersize=2.5,
-                        linewidth=1.2, label=label, color=color)
-                    range_values.append(y)
-                    plotted += 1
-                except Exception as e:
-                    errors.append(f"{label}: {e}")
-
-            if plotted == 0:
-                messagebox.showinfo(
-                    "Nothing to plot", "No datasets produced valid time series values.")
-                self._redraw_empty()
+            try:
+                data = prepare_timeseries_plot(
+                    self.state,
+                    metric_col=metric_col,
+                    agg_mode=agg_mode,
+                    value_mode=value_mode,
+                    compare=compare,
+                    baseline_id=baseline_id,
+                    sentinels=sentinels,
+                    outlier_threshold=outlier_threshold,
+                )
+            except Exception as e:
+                messagebox.showerror("Time series error", str(e))
                 return
 
-            mode_str = "absolute" if value_mode == "absolute" else "% of mean"
+            if not data.traces:
+                messagebox.showinfo(
+                    "Nothing to plot", "No datasets produced valid time series values.")
+                return
+
+            plotted = 0
+            range_values = []
+            for trace in data.traces:
+                color = color_map.get(trace.source_id, "#1f77b4")
+                self.ax.plot(trace.x, trace.y, marker="o",
+                             markersize=3, linewidth=1.5, label=trace.label, color=color)
+                range_values.append(trace.y)
+                plotted += 1
+
+            mode_str = data.mode_label
             if agg_mode == "pedal_stroke":
                 base_title = f"Pedal stroke {metric_col} ({mode_str})"
-                x_title = "Pedal stroke #"
             elif agg_mode == "roll_360deg":
                 base_title = f"Roll 360deg {metric_col} ({mode_str})"
-                x_title = "Record #"
             else:
                 base_title = f"Time series {metric_col} ({mode_str})"
-                x_title = "Time (s)"
-            if compare and b_label:
-                self.ax.set_title(
-                    f"{base_title} difference to Baseline ({b_label})")
-                self.ax.set_ylabel("Difference vs baseline")
-                baseline_handle = self.ax.axhline(
-                    0.0, color=baseline_color, linewidth=1.4, label=b_label)
-            else:
-                self.ax.set_title(base_title)
-                self.ax.set_ylabel(metric_col)
-                baseline_handle = None
 
-            self.ax.set_xlabel(x_title)
-            self.ax.grid(True, linestyle=":")
-            if fixed_range:
-                self.ax.set_ylim(fixed_range[0], fixed_range[1])
-            elif range_values:
+            if data.compare and data.baseline_label:
+                self.ax.plot([0, data.max_x], [0, 0], color=baseline_color,
+                             linewidth=1.6, label=data.baseline_label)
+                title = f"{base_title} difference to Baseline ({data.baseline_label})"
+                y_title = "Difference vs baseline"
+            else:
+                title = base_title
+                y_title = metric_col
+
+            if range_values:
                 range_minmax = self._minmax_from_values(
                     np.concatenate(range_values))
                 if range_minmax:
-                    self.ax.set_ylim(range_minmax[0], range_minmax[1])
-            low, high = self.ax.get_ylim()
-            self._update_range_entries(low, high)
+                    self._update_range_entries(*range_minmax)
 
-            handles, labels = self.ax.get_legend_handles_labels()
-            if compare and baseline_handle and baseline_handle not in handles:
-                handles.insert(0, baseline_handle)
-                labels.insert(0, b_label)
-            if handles:
-                self.ax.legend(
-                    handles, labels,
-                    loc="upper left", bbox_to_anchor=(1.01, 1.02),
-                    fontsize=9, frameon=False)
-                self.fig.subplots_adjust(left=0.06, right=0.82)
+            self.ax.set_title(title)
+            self.ax.set_xlabel(data.x_label)
+            self.ax.set_ylabel(y_title)
+            self.ax.grid(True, linestyle=":")
+            if plotted:
+                self.ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.02), fontsize=9, frameon=False)
+
+            if fixed_range:
+                self.ax.set_ylim(fixed_range[0], fixed_range[1])
 
             self.canvas.draw_idle()
 
             msg = f"Plotted {plotted} trace(s)."
-            if errors:
+            if data.errors:
                 msg += " Some datasets failed (details shown)."
                 messagebox.showwarning(
-                    "Partial plot", msg + "\n\n" + "\n".join(errors))
+                    "Partial plot", msg + "\n\n" + "\n".join(data.errors))
             self.status.set(msg)
             self._push_history()
             self._warn_outliers_if_needed(
@@ -2240,64 +1881,48 @@ class DashboardDataPlotter(tk.Tk):
             color_map = self._dataset_color_map()
             baseline_color = color_map.get(baseline_id, "red")
 
-            ordered = []
-            for sid in self.get_plot_order_source_ids():
-                if compare and sid == baseline_id:
-                    ordered.append(sid)
-                elif self.state.show_flag.get(sid, True):
-                    ordered.append(sid)
-            if compare and baseline_id and baseline_id not in ordered:
-                ordered.append(baseline_id)
+            try:
+                data = prepare_bar_plot(
+                    self.state,
+                    metric_col=metric_col,
+                    agg_mode=agg_mode,
+                    value_mode=value_mode,
+                    compare=compare,
+                    baseline_id=baseline_id,
+                    sentinels=sentinels,
+                    outlier_threshold=outlier_threshold,
+                )
+            except Exception as e:
+                messagebox.showerror("Bar plot error", str(e))
+                return
 
-            if compare:
-                baseline_mean = aggregate_metric(
-                    self.state.loaded[baseline_id][metric_col], sentinels, agg_mode, outlier_threshold)
-
-            labels, heights, errors, bar_colors = [], [], [], []
-            for sid in ordered:
-                label = self.state.id_to_display.get(sid, os.path.basename(sid))
-                try:
-                    mval = aggregate_metric(
-                        self.state.loaded[sid][metric_col], sentinels, agg_mode, outlier_threshold)
-                    heights.append(0.0 if compare and sid == baseline_id else (
-                        mval - baseline_mean if compare else mval))
-                    labels.append(label)
-                    bar_colors.append(color_map.get(sid, "#1f77b4"))
-                except Exception as e:
-                    errors.append(f"{label}: {e}")
-
-            if not labels:
+            if not data.labels:
                 messagebox.showinfo("Nothing to plot",
                                     "No datasets produced valid bar values.")
                 self._redraw_empty()
                 return
 
-            x = np.arange(len(labels))
-            # Reset margins to use full width (no right-side legend for bar plots).
+            x = np.arange(len(data.labels))
             self.fig.subplots_adjust(left=0.08, right=0.98)
-            baseline_label = None
+            baseline_label = data.baseline_label if data.compare else None
             baseline_handle = self.ax.axhline(
                 0.0, color=baseline_color if compare else "black",
                 linewidth=1.8 if compare else 1.2, label=baseline_label)
-            self.ax.bar(x, heights, color=bar_colors)
-            self.ax.set_xticks(x)
-            self.ax.set_xticklabels(labels, rotation=45, ha="right")
 
-            agg_label = {
-                "mean": "Mean",
-                "median": "Median",
-                "trimmed_mean_10": "10% trimmed mean",
-            }.get(str(agg_mode).lower(), "Mean")
-            mode_str = "absolute" if value_mode == "absolute" else "% of mean"
-            if compare:
-                b_label = self.state.id_to_display.get(baseline_id, baseline_display)
-                baseline_label = b_label
+            bar_colors = [color_map.get(self.state.display_to_id.get(label, ""), "#1f77b4") for label in data.labels]
+            self.ax.bar(x, data.values, color=bar_colors)
+            self.ax.set_xticks(x)
+            self.ax.set_xticklabels(data.labels, rotation=45, ha="right")
+
+            mode_str = data.mode_label
+            if data.compare:
+                b_label = data.baseline_label or self.state.id_to_display.get(baseline_id, baseline_display)
                 self.ax.set_title(
-                    f"{agg_label} {metric_col} difference vs baseline {b_label} ({mode_str})")
+                    f"{data.agg_label} {metric_col} difference vs baseline {b_label} ({mode_str})")
                 self.ax.set_ylabel("Difference vs baseline")
             else:
                 self.ax.set_title(
-                    f"{agg_label} {metric_col} per dataset ({mode_str})")
+                    f"{data.agg_label} {metric_col} per dataset ({mode_str})")
                 self.ax.set_ylabel(metric_col)
 
             if fixed_range:
@@ -2308,11 +1933,11 @@ class DashboardDataPlotter(tk.Tk):
             self._update_range_entries(low, high)
             self.canvas.draw_idle()
 
-            msg = f"Plotted {len(labels)} bar(s)."
-            if errors:
+            msg = f"Plotted {len(data.labels)} bar(s)."
+            if data.errors:
                 msg += " Some datasets failed (details shown)."
                 messagebox.showwarning(
-                    "Partial plot", msg + "\n\n" + "\n".join(errors))
+                    "Partial plot", msg + "\n\n" + "\n".join(data.errors))
             self.status.set(msg)
             self._push_history()
             self._warn_outliers_if_needed(
@@ -2333,107 +1958,59 @@ class DashboardDataPlotter(tk.Tk):
             self.ax.clear()
             self._apply_cartesian_background_matplotlib(self.ax)
 
-            plotted, errors = 0, []
-            range_values = []
             color_map = self._dataset_color_map()
             baseline_color = color_map.get(baseline_id, "red")
-            baseline_label = None
 
-            if not compare:
-                for sid in self.get_plot_order_source_ids():
-                    if not self.state.show_flag.get(sid, True):
-                        continue
-                    label = self.state.id_to_display.get(sid, os.path.basename(sid))
-                    try:
-                        ang_deg, val = prepare_angle_value_agg(
-                            self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
-                        val2, _ = self._apply_value_mode(val, value_mode)
-                        m = np.isfinite(ang_deg) & np.isfinite(val2)
-                        ang_deg2 = ang_deg[m]
-                        val2 = val2[m]
-                        if len(ang_deg2) == 0:
-                            raise ValueError(
-                                "No valid values after filtering.")
-                        if close_loop and len(ang_deg2) > 2:
-                            ang_deg2 = np.concatenate([ang_deg2, [360.0]])
-                            val2 = np.concatenate([val2, [val2[0]]])
-                        color = color_map.get(sid)
-                        self.ax.plot(ang_deg2, val2, marker="o",
-                                     markersize=3, linewidth=1.5, label=label, color=color)
-                        range_values.append(val2)
-                        plotted += 1
-                    except Exception as e:
-                        errors.append(f"{label}: {e}")
+            try:
+                data = prepare_cartesian_plot(
+                    self.state,
+                    angle_col=angle_col,
+                    metric_col=metric_col,
+                    agg_mode=agg_mode,
+                    value_mode=value_mode,
+                    compare=compare,
+                    baseline_id=baseline_id,
+                    sentinels=sentinels,
+                    outlier_threshold=outlier_threshold,
+                    close_loop=close_loop,
+                )
+            except Exception as e:
+                messagebox.showerror("Cartesian plot error", str(e))
+                return
 
-                mode_str = "absolute" if value_mode == "absolute" else "% of mean"
-                self.ax.set_title(f"{agg_label} {metric_col} ({mode_str})")
-                self.ax.set_ylabel(metric_col)
-            else:
-                b_label = self.state.id_to_display.get(
-                    baseline_id, os.path.basename(baseline_id))
-                baseline_label = b_label
-                try:
-                    b_ang_deg, b_val = prepare_angle_value_agg(
-                        self.state.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
-                    b_val2, _ = self._apply_value_mode(b_val, value_mode)
-                except Exception as e:
-                    messagebox.showerror(
-                        "Baseline error", f"Baseline '{b_label}' failed:\n{e}")
-                    return
-
-                for sid in self.get_plot_order_source_ids():
-                    if not self.state.show_flag.get(sid, True):
-                        continue
-                    if sid == baseline_id:
-                        continue
-                    label = self.state.id_to_display.get(
-                        sid, os.path.basename(sid))
-                    try:
-                        ang_deg, val = prepare_angle_value_agg(
-                            self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
-                        val2, _ = self._apply_value_mode(val, value_mode)
-                        base_at = circular_interp_baseline(
-                            b_ang_deg, b_val2, ang_deg)
-                        delta = val2 - base_at
-                        m = np.isfinite(delta) & np.isfinite(ang_deg)
-                        ang_deg2 = ang_deg[m]
-                        delta2 = delta[m]
-                        if len(ang_deg2) == 0:
-                            raise ValueError(
-                                "No valid comparison values after filtering.")
-                        order = np.argsort(ang_deg2)
-                        ang_deg2 = ang_deg2[order]
-                        delta2 = delta2[order]
-                        if close_loop and len(ang_deg2) > 2:
-                            ang_deg2 = np.concatenate([ang_deg2, [360.0]])
-                            delta2 = np.concatenate([delta2, [delta2[0]]])
-                        color = color_map.get(sid)
-                        self.ax.plot(ang_deg2, delta2, marker="o",
-                                     markersize=3, linewidth=1.5, label=label, color=color)
-                        range_values.append(delta2)
-                        plotted += 1
-                    except Exception as e:
-                        errors.append(f"{label}: {e}")
-
-                mode_str = "absolute" if value_mode == "absolute" else "% of mean"
-                self.ax.set_title(
-                    f"{agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})")
-                self.ax.set_ylabel("Difference vs baseline")
-
-            if plotted == 0:
+            if not data.traces:
                 messagebox.showinfo(
                     "Nothing to plot", "No datasets produced valid cartesian values.")
                 self._redraw_empty()
                 return
 
+            plotted = 0
+            range_values = []
+            for trace in data.traces:
+                color = color_map.get(trace.source_id, "#1f77b4")
+                self.ax.plot(trace.x, trace.y, marker="o",
+                             markersize=3, linewidth=1.5, label=trace.label, color=color)
+                range_values.append(trace.y)
+                plotted += 1
+
+            baseline_label = data.baseline_label if data.compare else None
             baseline_handle = self.ax.axhline(
                 0.0, color=baseline_color if compare else "black",
                 linewidth=1.8 if compare else 1.2, label=baseline_label)
             self.ax.set_xlabel("Crank angle (deg)")
             self.ax.set_xlim(0, 360)
+
+            mode_str = data.mode_label
+            if data.compare:
+                b_label = data.baseline_label or self.state.id_to_display.get(baseline_id, baseline_display)
+                self.ax.set_title(
+                    f"{data.agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})")
+                self.ax.set_ylabel("Difference vs baseline")
+            else:
+                self.ax.set_title(f"{data.agg_label} {metric_col} ({mode_str})")
+                self.ax.set_ylabel(metric_col)
+
             if plotted:
-                # Reserve extra space on the right so the legend is fully visible,
-                # and nudge the plot left.
                 self.fig.subplots_adjust(left=0.1, right=0.84)
                 handles, labels = self.ax.get_legend_handles_labels()
                 if compare and baseline_label and baseline_handle and baseline_handle not in handles:
@@ -2447,6 +2024,7 @@ class DashboardDataPlotter(tk.Tk):
                     handles, labels,
                     loc="upper left", bbox_to_anchor=(1.01, 1.02),
                     fontsize=9, frameon=False)
+
             if fixed_range:
                 self.ax.set_ylim(fixed_range[0], fixed_range[1])
             elif range_values:
@@ -2460,10 +2038,10 @@ class DashboardDataPlotter(tk.Tk):
             self.canvas.draw_idle()
 
             msg = f"Plotted {plotted} trace(s)."
-            if errors:
+            if data.errors:
                 msg += " Some datasets failed (details shown)."
                 messagebox.showwarning(
-                    "Partial plot", msg + "\n\n" + "\n".join(errors))
+                    "Partial plot", msg + "\n\n" + "\n".join(data.errors))
             self.status.set(msg)
             self._push_history()
             self._warn_outliers_if_needed(
@@ -2485,34 +2063,61 @@ class DashboardDataPlotter(tk.Tk):
         self.ax.set_theta_direction(-1)
         self._apply_radar_background_matplotlib(self.ax)
 
-        plotted, errors = 0, []
         color_map = self._dataset_color_map()
         baseline_color = color_map.get(baseline_id, "red")
 
-        if not compare:
-            for sid in self.get_plot_order_source_ids():
-                if not self.state.show_flag.get(sid, True):
-                    continue
-                label = self.state.id_to_display.get(sid, os.path.basename(sid))
-                try:
-                    ang_deg, val = prepare_angle_value_agg(
-                        self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
-                    val2, _ = self._apply_value_mode(val, value_mode)
+        try:
+            data = prepare_radar_plot(
+                self.state,
+                angle_col=angle_col,
+                metric_col=metric_col,
+                agg_mode=agg_mode,
+                value_mode=value_mode,
+                compare=compare,
+                baseline_id=baseline_id,
+                sentinels=sentinels,
+                outlier_threshold=outlier_threshold,
+                close_loop=close_loop,
+            )
+        except Exception as e:
+            messagebox.showerror("Radar plot error", str(e))
+            return
 
-                    theta = np.deg2rad(ang_deg)
-                    if close_loop and len(theta) > 2:
-                        theta = np.concatenate([theta, [theta[0]]])
-                        val2 = np.concatenate([val2, [val2[0]]])
+        if not data.traces:
+            messagebox.showinfo(
+                "Nothing to plot", "No datasets produced valid radar values.")
+            self._redraw_empty()
+            return
 
-                    color = color_map.get(sid)
-                    self.ax.plot(theta, val2, marker="o",
-                                 markersize=3, linewidth=1.5, label=label, color=color)
-                    plotted += 1
-                except Exception as e:
-                    errors.append(f"{label}: {e}")
+        plotted = 0
+        for trace in data.traces:
+            color = baseline_color if trace.is_baseline else color_map.get(trace.source_id, "#1f77b4")
+            theta = np.deg2rad(trace.x)
+            self.ax.plot(theta, trace.y, marker="o",
+                         markersize=3, linewidth=1.5, label=trace.label, color=color)
+            if not trace.is_baseline:
+                plotted += 1
 
-            mode_str = "absolute" if value_mode == "absolute" else "% of mean"
-            self.ax.set_title(f"{agg_label} {metric_col} ({mode_str})", pad=18)
+        mode_str = data.mode_label
+        if data.compare:
+            b_label = data.baseline_label or self.state.id_to_display.get(baseline_id, baseline_display)
+            self.ax.set_title(
+                f"{data.agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})", pad=18)
+            self.ax.grid(True)
+            self.ax.legend(loc="upper left", bbox_to_anchor=(
+                1.02, 1.05), fontsize=9, frameon=False)
+            self.ax.set_position([0.05, 0.03, 0.8, 0.85])
+            if fixed_range:
+                self.ax.set_rlim(data.offset + fixed_range[0],
+                                 data.offset + fixed_range[1])
+            else:
+                self.ax.autoscale(enable=True, axis="y")
+                self.ax.autoscale_view(scaley=True)
+            low, high = self.ax.get_ylim()
+            self._update_range_entries(low - data.offset, high - data.offset)
+            fmt_delta_ticks(self.ax, data.offset)
+        else:
+            self.ax.set_title(f"{data.agg_label} {metric_col} ({mode_str})", pad=18)
             self.ax.grid(True)
             self.ax.set_position([0.05, 0.05, 0.75, 0.80])
             if plotted:
@@ -2527,99 +2132,12 @@ class DashboardDataPlotter(tk.Tk):
             self._update_range_entries(low, high)
             fmt_abs_ticks(self.ax)
 
-        else:
-            b_label = self.state.id_to_display.get(
-                baseline_id, os.path.basename(baseline_id))
-            try:
-                b_ang_deg, b_val = prepare_angle_value_agg(
-                    self.state.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
-                b_val2, _ = self._apply_value_mode(b_val, value_mode)
-            except Exception as e:
-                messagebox.showerror(
-                    "Baseline error", f"Baseline '{b_label}' failed:\n{e}")
-                return
-
-            deltas_by_id = {}
-            max_abs = 0.0
-            for sid in self.get_plot_order_source_ids():
-                if not self.state.show_flag.get(sid, True):
-                    continue
-                if sid == baseline_id:
-                    continue
-                label = self.state.id_to_display.get(sid, os.path.basename(sid))
-                try:
-                    ang_deg, val = prepare_angle_value_agg(
-                        self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
-                    val2, _ = self._apply_value_mode(val, value_mode)
-                    base_at = circular_interp_baseline(
-                        b_ang_deg, b_val2, ang_deg)
-                    delta = val2 - base_at
-                    m = np.isfinite(delta) & np.isfinite(ang_deg)
-                    ang_deg2 = ang_deg[m]
-                    delta2 = delta[m]
-                    if len(ang_deg2) == 0:
-                        raise ValueError(
-                            "No valid comparison values after filtering.")
-                    order = np.argsort(ang_deg2)
-                    ang_deg2 = ang_deg2[order]
-                    delta2 = delta2[order]
-                    deltas_by_id[sid] = (ang_deg2, delta2)
-                    this_max = float(np.nanmax(np.abs(delta2)))
-                    if np.isfinite(this_max):
-                        max_abs = max(max_abs, this_max)
-                except Exception as e:
-                    errors.append(f"{label}: {e}")
-
-            if not deltas_by_id:
-                messagebox.showinfo(
-                    "Nothing to plot", "No non-baseline datasets produced valid comparison traces.")
-                self._redraw_empty()
-                return
-
-            if max_abs <= 0 or not np.isfinite(max_abs):
-                max_abs = 1.0
-            offset = 1.10 * max_abs
-
-            theta_ring = np.linspace(0, 2 * np.pi, 361)
-            r_ring = np.full_like(theta_ring, offset, dtype=float)
-            self.ax.plot(theta_ring, r_ring, linewidth=2.6,
-                         color=baseline_color, label=b_label)
-
-            for sid, (ang_deg2, delta2) in deltas_by_id.items():
-                label = self.state.id_to_display.get(sid, os.path.basename(sid))
-                theta = np.deg2rad(ang_deg2)
-                r = delta2 + offset
-                if close_loop and len(theta) > 2:
-                    theta = np.concatenate([theta, [theta[0]]])
-                    r = np.concatenate([r, [r[0]]])
-                color = color_map.get(sid)
-                self.ax.plot(theta, r, marker="o", markersize=3,
-                             linewidth=1.5, label=label, color=color)
-                plotted += 1
-
-            mode_str = "absolute" if value_mode == "absolute" else "% of mean"
-            self.ax.set_title(
-                f"{agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})", pad=18)
-            self.ax.grid(True)
-            self.ax.legend(loc="upper left", bbox_to_anchor=(
-                1.02, 1.05), fontsize=9, frameon=False)
-            self.ax.set_position([0.05, 0.03, 0.8, 0.85])
-            if fixed_range:
-                self.ax.set_rlim(offset + fixed_range[0],
-                                 offset + fixed_range[1])
-            else:
-                self.ax.autoscale(enable=True, axis="y")
-                self.ax.autoscale_view(scaley=True)
-            low, high = self.ax.get_ylim()
-            self._update_range_entries(low - offset, high - offset)
-            fmt_delta_ticks(self.ax, offset)
-
         self.canvas.draw_idle()
         msg = f"Plotted {plotted} trace(s)."
-        if errors:
+        if data.errors:
             msg += " Some datasets failed (details shown)."
             messagebox.showwarning(
-                "Partial plot", msg + "\n\n" + "\n".join(errors))
+                "Partial plot", msg + "\n\n" + "\n".join(data.errors))
         self.status.set(msg)
         self._push_history()
         self._warn_outliers_if_needed(

@@ -114,7 +114,7 @@ Dataset order in the **Data Sources panel defines plotting order everywhere**.
 
 ---
 
-## Radar background image (optional)
+## Radar/Cartesian background images (optional)
 
 If you want a background image behind radar plots, place an image at:
 
@@ -123,9 +123,18 @@ src/dashboard_data_plotter/assets/radar_background.png
 ```
 
 You can also use `radar_background.jpg` or `radar_background.jpeg`. When present, the image is
-rendered behind both the Matplotlib and Plotly radar plots. Use the “Radar background image”
+rendered behind both the Matplotlib and Plotly radar plots. Use the "Background image"
 checkbox in the Plot settings panel to toggle it on or off. If the file is missing, radar plots
 render normally without a background.
+
+For Cartesian plots, the app uses:
+
+```
+src/dashboard_data_plotter/assets/leg_muscles.jpeg
+```
+
+When present, it is rendered behind the Plotly/Matplotlib Cartesian plot along with angular color
+bands. If the file is missing, Cartesian plots render normally without a background.
 
 ---
 
@@ -178,9 +187,16 @@ This will:
 
 ---
 
-## Streamlit stub UI (optional)
+## Streamlit UI (optional)
 
-To run the minimal Streamlit UI for quick radar/bar plotting:
+The Streamlit UI mirrors most plotting controls from the Tkinter app, including:
+- Plot type selection (Radar / Cartesian / Bar / Time series)
+- Close loop, outlier removal (MAD), fixed range
+- Baseline comparison
+- Optional background images/bands
+- Plot history (Prev / Next / Delete)
+
+To run the Streamlit UI:
 
 ```bat
 streamlit run streamlit_app.py

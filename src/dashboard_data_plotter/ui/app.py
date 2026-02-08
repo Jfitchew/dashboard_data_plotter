@@ -5,6 +5,7 @@ from dashboard_data_plotter.plotting.helpers import (
     fmt_delta_ticks,
     choose_decimals_from_ticks,
 )
+from dashboard_data_plotter.core.state import ProjectState
 from dashboard_data_plotter.data.loaders import (
     DEFAULT_SENTINELS,
     load_json_file_datasets,
@@ -111,10 +112,7 @@ class DashboardDataPlotter(tk.Tk):
         # Internal storage:
         #   source_id: unique ID (file path, or "PASTE::<name>")
         #   display_name: human name shown in listbox/legend/baseline chooser
-        self.loaded = {}            # source_id -> DataFrame
-        self.id_to_display = {}     # source_id -> display name
-        self.display_to_id = {}     # display name -> source_id
-        self.show_flag = {}         # source_id -> bool (whether to plot)
+        self.state = ProjectState()
 
         self.angle_var = tk.StringVar(value="leftPedalCrankAngle")
         self.metric_var = tk.StringVar(value="")
@@ -177,7 +175,7 @@ class DashboardDataPlotter(tk.Tk):
 
     def _dataset_color_map(self):
         ids = list(self.get_plot_order_source_ids())
-        for sid in self.loaded.keys():
+        for sid in self.state.loaded.keys():
             if sid not in ids:
                 ids.append(sid)
         colors = self._dataset_color_cycle()
@@ -633,7 +631,7 @@ class DashboardDataPlotter(tk.Tk):
         self._set_plot_type_controls_state()
 
     def _can_autoplot(self):
-        if not self.loaded:
+        if not self.state.loaded:
             return False
         if not self.metric_var.get().strip():
             return False
@@ -642,8 +640,8 @@ class DashboardDataPlotter(tk.Tk):
             return False
         if self.compare_var.get():
             baseline_display = self.baseline_display_var.get().strip()
-            baseline_id = self.display_to_id.get(baseline_display, "")
-            if not baseline_id or baseline_id not in self.loaded:
+            baseline_id = self.state.display_to_id.get(baseline_display, "")
+            if not baseline_id or baseline_id not in self.state.loaded:
                 return False
         return True
 
@@ -715,14 +713,14 @@ class DashboardDataPlotter(tk.Tk):
             for sid in self.get_plot_order_source_ids():
                 if compare and sid == baseline_id:
                     ordered.append(sid)
-                elif self.show_flag.get(sid, True):
+                elif self.state.show_flag.get(sid, True):
                     ordered.append(sid)
             if compare and baseline_id and baseline_id not in ordered:
                 ordered.append(baseline_id)
             return ordered
 
         sids = [sid for sid in self.get_plot_order_source_ids()
-                if self.show_flag.get(sid, True)]
+                if self.state.show_flag.get(sid, True)]
         if compare and baseline_id and baseline_id not in sids:
             sids.append(baseline_id)
         return sids
@@ -738,7 +736,7 @@ class DashboardDataPlotter(tk.Tk):
             return
         flagged = []
         for sid in sids:
-            df = self.loaded.get(sid)
+            df = self.state.loaded.get(sid)
             if df is None or metric_col not in df.columns:
                 continue
             values = sanitize_numeric(df[metric_col], sentinels)
@@ -747,7 +745,7 @@ class DashboardDataPlotter(tk.Tk):
             after = np.isfinite(filtered.to_numpy(dtype=float))
             count = int(np.sum(before & ~after))
             if count > 0:
-                label = self.id_to_display.get(sid, os.path.basename(sid))
+                label = self.state.id_to_display.get(sid, os.path.basename(sid))
                 flagged.append(f"{label} ({count})")
         if flagged:
             messagebox.showwarning(
@@ -767,7 +765,7 @@ class DashboardDataPlotter(tk.Tk):
             return
         flagged = []
         for sid in sids:
-            df = self.loaded.get(sid)
+            df = self.state.loaded.get(sid)
             if df is None or metric_col not in df.columns:
                 continue
             values = sanitize_numeric(df[metric_col], sentinels)
@@ -777,7 +775,7 @@ class DashboardDataPlotter(tk.Tk):
             total = int(np.sum(before))
             removed = int(np.sum(before & ~after))
             if total > 0 and (removed / total) > 0.05:
-                label = self.id_to_display.get(sid, os.path.basename(sid))
+                label = self.state.id_to_display.get(sid, os.path.basename(sid))
                 pct = 100.0 * removed / total
                 flagged.append(f"{label} ({pct:.1f}%)")
         if flagged:
@@ -889,7 +887,7 @@ class DashboardDataPlotter(tk.Tk):
             "range_low": self.range_low_var.get(),
             "range_high": self.range_high_var.get(),
             "range_fixed": bool(self.range_fixed_var.get()),
-            "show_flag": dict(self.show_flag),
+            "show_flag": dict(self.state.show_flag),
         }
 
     def _update_history_buttons(self):
@@ -924,11 +922,11 @@ class DashboardDataPlotter(tk.Tk):
     def _apply_snapshot(self, snap):
         missing = []
         for sid, flag in snap.get("show_flag", {}).items():
-            if sid in self.loaded:
-                self.show_flag[sid] = bool(flag)
+            if sid in self.state.loaded:
+                self.state.show_flag[sid] = bool(flag)
                 if self.files_tree.exists(sid):
                     name = self.files_tree.item(sid, "values")[1]
-                    show_txt = "✓" if self.show_flag.get(sid, True) else ""
+                    show_txt = "✓" if self.state.show_flag.get(sid, True) else ""
                     self.files_tree.item(sid, values=(show_txt, name))
             else:
                 missing.append(sid)
@@ -976,8 +974,8 @@ class DashboardDataPlotter(tk.Tk):
 
         if self.compare_var.get():
             baseline_display = self.baseline_display_var.get().strip()
-            baseline_id = self.display_to_id.get(baseline_display, "")
-            if not baseline_id or baseline_id not in self.loaded:
+            baseline_id = self.state.display_to_id.get(baseline_display, "")
+            if not baseline_id or baseline_id not in self.state.loaded:
                 self.compare_var.set(False)
                 self._set_compare_controls_state()
 
@@ -1055,9 +1053,9 @@ class DashboardDataPlotter(tk.Tk):
         self.rename_dataset(row_id)
 
     def toggle_show(self, source_id: str):
-        cur = bool(self.show_flag.get(source_id, True))
+        cur = bool(self.state.show_flag.get(source_id, True))
         new = not cur
-        self.show_flag[source_id] = new
+        self.state.show_flag[source_id] = new
         show_txt = "✓" if new else ""
         if self.files_tree.exists(source_id):
             name = self.files_tree.item(source_id, "values")[1]
@@ -1067,11 +1065,11 @@ class DashboardDataPlotter(tk.Tk):
         items = self.files_tree.get_children("")
         if not items:
             return
-        any_hidden = any(not self.show_flag.get(iid, True) for iid in items)
+        any_hidden = any(not self.state.show_flag.get(iid, True) for iid in items)
         new_state = True if any_hidden else False
         show_txt = "✓" if new_state else ""
         for iid in items:
-            self.show_flag[iid] = new_state
+            self.state.show_flag[iid] = new_state
             name = self.files_tree.item(iid, "values")[1]
             self.files_tree.item(iid, values=(show_txt, name))
 
@@ -1129,15 +1127,15 @@ class DashboardDataPlotter(tk.Tk):
     def get_plot_order_source_ids(self):
         try:
             ids = [iid for iid in self.files_tree.get_children(
-                "") if iid in self.loaded]
+                "") if iid in self.state.loaded]
             if ids:
                 return ids
         except Exception:
             pass
-        return list(self.loaded.keys())
+        return list(self.state.loaded.keys())
 
     def rename_dataset(self, source_id: str):
-        old = self.id_to_display.get(source_id, source_id)
+        old = self.state.id_to_display.get(source_id, source_id)
         new_name = simpledialog.askstring(
             "Rename dataset", "New name:", initialvalue=old, parent=self)
         if not new_name:
@@ -1145,27 +1143,27 @@ class DashboardDataPlotter(tk.Tk):
         new_name = new_name.strip()
         if not new_name:
             return
-        if new_name in self.display_to_id and self.display_to_id[new_name] != source_id:
+        if new_name in self.state.display_to_id and self.state.display_to_id[new_name] != source_id:
             new_name = make_unique_name(
-                new_name, set(self.display_to_id.keys()))
-        self.id_to_display[source_id] = new_name
-        if old in self.display_to_id and self.display_to_id[old] == source_id:
-            self.display_to_id.pop(old, None)
-        self.display_to_id[new_name] = source_id
+                new_name, set(self.state.display_to_id.keys()))
+        self.state.id_to_display[source_id] = new_name
+        if old in self.state.display_to_id and self.state.display_to_id[old] == source_id:
+            self.state.display_to_id.pop(old, None)
+        self.state.display_to_id[new_name] = source_id
         if self.files_tree.exists(source_id):
-            show_txt = "✓" if self.show_flag.get(source_id, True) else ""
+            show_txt = "✓" if self.state.show_flag.get(source_id, True) else ""
             self.files_tree.item(source_id, values=(show_txt, new_name))
         if self.baseline_display_var.get() == old:
             self.baseline_display_var.set(new_name)
         self.refresh_baseline_choices()
 
     def _register_dataset(self, source_id: str, display: str, df: pd.DataFrame):
-        display = make_unique_name(display, set(self.display_to_id.keys()))
+        display = make_unique_name(display, set(self.state.display_to_id.keys()))
         source_id = source_id if source_id else f"PASTE::{display}"
-        self.loaded[source_id] = df
-        self.id_to_display[source_id] = display
-        self.display_to_id[display] = source_id
-        self.show_flag[source_id] = True
+        self.state.loaded[source_id] = df
+        self.state.id_to_display[source_id] = display
+        self.state.display_to_id[display] = source_id
+        self.state.show_flag[source_id] = True
         if not self.files_tree.exists(source_id):
             self.files_tree.insert(
                 "", "end", iid=source_id, values=("✓", display))
@@ -1174,11 +1172,11 @@ class DashboardDataPlotter(tk.Tk):
 
     def _unique_paste_source_id(self, display: str) -> str:
         base = f"PASTE::{display}"
-        if base not in self.loaded:
+        if base not in self.state.loaded:
             return base
         i = 2
         candidate = f"{base} ({i})"
-        while candidate in self.loaded:
+        while candidate in self.state.loaded:
             i += 1
             candidate = f"{base} ({i})"
         return candidate
@@ -1205,7 +1203,7 @@ class DashboardDataPlotter(tk.Tk):
                 for name, df in datasets:
                     display = base if name == "Dataset" else str(name)
                     source_id = p if name == "Dataset" else f"{p}:::{display}"
-                    if source_id in self.loaded:
+                    if source_id in self.state.loaded:
                         continue
                     self._register_dataset(
                         source_id=source_id, display=display, df=df)
@@ -1217,7 +1215,7 @@ class DashboardDataPlotter(tk.Tk):
 
         if added:
             self.status.set(
-                f"Loaded {added} dataset(s) from file(s). Total: {len(self.loaded)}")
+                f"Loaded {added} dataset(s) from file(s). Total: {len(self.state.loaded)}")
             self.refresh_metric_choices()
             self.refresh_baseline_choices()
             self._auto_default_metric()
@@ -1255,13 +1253,13 @@ class DashboardDataPlotter(tk.Tk):
             if not isinstance(records, list) or (len(records) > 0 and not isinstance(records[0], dict)):
                 continue
             display = make_unique_name(
-                str(name), set(self.display_to_id.keys()))
+                str(name), set(self.state.display_to_id.keys()))
             source_id = self._unique_paste_source_id(display)
             try:
                 df = pd.DataFrame(records)
                 for c in df.columns:
                     df[c] = pd.to_numeric(df[c], errors="coerce")
-                if source_id in self.loaded:
+                if source_id in self.state.loaded:
                     continue
                 self._register_dataset(
                     source_id=source_id, display=display, df=df)
@@ -1276,7 +1274,7 @@ class DashboardDataPlotter(tk.Tk):
             return
 
         self.status.set(
-            f"Loaded {added} pasted dataset(s). Total: {len(self.loaded)}")
+            f"Loaded {added} pasted dataset(s). Total: {len(self.state.loaded)}")
         self.refresh_metric_choices()
         self.refresh_baseline_choices()
         self._auto_default_metric()
@@ -1311,12 +1309,12 @@ class DashboardDataPlotter(tk.Tk):
 
     # ---------------- Metrics / baseline lists ----------------
     def refresh_metric_choices(self):
-        if not self.loaded:
+        if not self.state.loaded:
             self.metric_combo["values"] = []
             self.metric_var.set("")
             return
         numeric_sets = []
-        for df in self.loaded.values():
+        for df in self.state.loaded.values():
             numeric_cols = {
                 c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])}
             numeric_sets.append(numeric_cols)
@@ -1343,18 +1341,18 @@ class DashboardDataPlotter(tk.Tk):
             self.metric_var.set(vals[0])
 
     def refresh_baseline_choices(self):
-        displays = list(self.display_to_id.keys())
+        displays = list(self.state.display_to_id.keys())
         displays.sort(key=dataset_sort_key)
         self.baseline_combo["values"] = displays
         cur = self.baseline_display_var.get()
-        if cur and cur not in self.display_to_id:
+        if cur and cur not in self.state.display_to_id:
             self.baseline_display_var.set(displays[0] if displays else "")
         if not cur and displays:
             self.baseline_display_var.set(displays[0])
 
     # ---------------- Saving ----------------
     def save_all_datasets(self):
-        if not self.loaded:
+        if not self.state.loaded:
             messagebox.showinfo("Save All", "No datasets are loaded.")
             return
         out_path = filedialog.asksaveasfilename(
@@ -1366,16 +1364,16 @@ class DashboardDataPlotter(tk.Tk):
         if not out_path:
             return
         ids = self.get_plot_order_source_ids()
-        for sid in self.loaded.keys():
+        for sid in self.state.loaded.keys():
             if sid not in ids:
                 ids.append(sid)
-        items = [(self.id_to_display.get(sid, sid), sid) for sid in ids]
+        items = [(self.state.id_to_display.get(sid, sid), sid) for sid in ids]
         payload = {}
         existing = set()
         for disp, sid in items:
             name = make_unique_name(disp, existing)
             existing.add(name)
-            df = self.loaded[sid]
+            df = self.state.loaded[sid]
             payload[name] = {"rideData": df_to_jsonable_records(df)}
         try:
             with open(out_path, "w", encoding="utf-8") as f:
@@ -1394,24 +1392,21 @@ class DashboardDataPlotter(tk.Tk):
         for source_id in sel:
             if self.files_tree.exists(source_id):
                 self.files_tree.delete(source_id)
-            disp = self.id_to_display.pop(source_id, None)
+            disp = self.state.id_to_display.pop(source_id, None)
             if disp is not None:
-                self.display_to_id.pop(disp, None)
-            self.loaded.pop(source_id, None)
-            self.show_flag.pop(source_id, None)
+                self.state.display_to_id.pop(disp, None)
+            self.state.loaded.pop(source_id, None)
+            self.state.show_flag.pop(source_id, None)
         self.refresh_metric_choices()
         self.refresh_baseline_choices()
-        self.status.set(f"Total loaded: {len(self.loaded)}")
-        if not self.loaded:
+        self.status.set(f"Total loaded: {len(self.state.loaded)}")
+        if not self.state.loaded:
             self._redraw_empty()
 
     def clear_all(self):
         for iid in self.files_tree.get_children(""):
             self.files_tree.delete(iid)
-        self.loaded.clear()
-        self.id_to_display.clear()
-        self.display_to_id.clear()
-        self.show_flag.clear()
+        self.state.clear()
         self.refresh_metric_choices()
         self.refresh_baseline_choices()
         self.status.set("Cleared all data sources.")
@@ -1442,7 +1437,7 @@ class DashboardDataPlotter(tk.Tk):
         for sid in self.get_plot_order_source_ids():
             if compare and sid == baseline_id:
                 ordered.append(sid)
-            elif self.show_flag.get(sid, True):
+            elif self.state.show_flag.get(sid, True):
                 ordered.append(sid)
         if compare and baseline_id and baseline_id not in ordered:
             ordered.append(baseline_id)
@@ -1450,14 +1445,14 @@ class DashboardDataPlotter(tk.Tk):
         baseline_mean = 0.0
         if compare:
             baseline_mean = aggregate_metric(
-                self.loaded[baseline_id][metric_col], sentinels, agg_mode, outlier_threshold)
+                self.state.loaded[baseline_id][metric_col], sentinels, agg_mode, outlier_threshold)
 
         labels, heights, errors, bar_colors = [], [], [], []
         for sid in ordered:
-            label = self.id_to_display.get(sid, os.path.basename(sid))
+            label = self.state.id_to_display.get(sid, os.path.basename(sid))
             try:
                 mval = aggregate_metric(
-                    self.loaded[sid][metric_col], sentinels, agg_mode, outlier_threshold)
+                    self.state.loaded[sid][metric_col], sentinels, agg_mode, outlier_threshold)
                 heights.append(0.0 if compare and sid == baseline_id else (
                     mval - baseline_mean if compare else mval))
                 labels.append(label)
@@ -1480,7 +1475,7 @@ class DashboardDataPlotter(tk.Tk):
         }.get(str(agg_mode).lower(), "Mean")
         mode_str = "absolute" if value_mode == "absolute" else "% of mean"
         if compare:
-            b_label = self.id_to_display.get(baseline_id, baseline_display)
+            b_label = self.state.id_to_display.get(baseline_id, baseline_display)
             title = f"{agg_label} {metric_col} difference vs baseline {b_label} ({mode_str})"
             y_title = "Difference vs baseline"
         else:
@@ -1520,36 +1515,36 @@ class DashboardDataPlotter(tk.Tk):
         b_strokes = None
         b_roll = None
         if compare:
-            b_label = self.id_to_display.get(
+            b_label = self.state.id_to_display.get(
                 baseline_id, os.path.basename(baseline_id))
             if agg_mode == "pedal_stroke":
                 _, b_vals = self._pedal_stroke_series(
-                    self.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
+                    self.state.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
                 b_val2, _ = self._apply_value_mode(b_vals, value_mode)
                 b_strokes = b_val2
             elif agg_mode == "roll_360deg":
                 _, b_vals = self._roll_360_series(
-                    self.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
+                    self.state.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
                 b_val2, _ = self._apply_value_mode(b_vals, value_mode)
                 b_roll = b_val2
             else:
                 b_vals = sanitize_numeric(
-                    self.loaded[baseline_id][metric_col], sentinels)
+                    self.state.loaded[baseline_id][metric_col], sentinels)
                 if outlier_threshold is not None:
                     b_vals = filter_outliers_mad(b_vals, outlier_threshold)
                 b_val2, _ = self._apply_value_mode(
                     b_vals.to_numpy(dtype=float), value_mode)
 
         for sid in self.get_plot_order_source_ids():
-            if not self.show_flag.get(sid, True):
+            if not self.state.show_flag.get(sid, True):
                 continue
             if compare and sid == baseline_id:
                 continue
-            label = self.id_to_display.get(sid, os.path.basename(sid))
+            label = self.state.id_to_display.get(sid, os.path.basename(sid))
             try:
                 if agg_mode == "pedal_stroke":
                     t, vals = self._pedal_stroke_series(
-                        self.loaded[sid], metric_col, sentinels, outlier_threshold)
+                        self.state.loaded[sid], metric_col, sentinels, outlier_threshold)
                     val2, _ = self._apply_value_mode(vals, value_mode)
                     if compare:
                         if b_strokes is None:
@@ -1564,7 +1559,7 @@ class DashboardDataPlotter(tk.Tk):
                         y = val2
                 elif agg_mode == "roll_360deg":
                     t, vals = self._roll_360_series(
-                        self.loaded[sid], metric_col, sentinels, outlier_threshold)
+                        self.state.loaded[sid], metric_col, sentinels, outlier_threshold)
                     val2, _ = self._apply_value_mode(vals, value_mode)
                     if compare:
                         if b_roll is None:
@@ -1579,7 +1574,7 @@ class DashboardDataPlotter(tk.Tk):
                         y = val2
                 else:
                     vals = sanitize_numeric(
-                        self.loaded[sid][metric_col], sentinels)
+                        self.state.loaded[sid][metric_col], sentinels)
                     if outlier_threshold is not None:
                         vals = filter_outliers_mad(vals, outlier_threshold)
                     val2, _ = self._apply_value_mode(
@@ -1680,12 +1675,12 @@ class DashboardDataPlotter(tk.Tk):
 
         if not compare:
             for sid in self.get_plot_order_source_ids():
-                if not self.show_flag.get(sid, True):
+                if not self.state.show_flag.get(sid, True):
                     continue
-                label = self.id_to_display.get(sid, os.path.basename(sid))
+                label = self.state.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     ang_deg, val = prepare_angle_value_agg(
-                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
+                        self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                     val2, _ = self._apply_value_mode(val, value_mode)
                     m = np.isfinite(ang_deg) & np.isfinite(val2)
                     ang_deg2 = ang_deg[m]
@@ -1709,14 +1704,14 @@ class DashboardDataPlotter(tk.Tk):
             title = f"{agg_label} {metric_col} ({mode_str})"
             y_title = metric_col
         else:
-            b_label = self.id_to_display.get(
+            b_label = self.state.id_to_display.get(
                 baseline_id, os.path.basename(baseline_id))
             fig.add_scatter(
                 x=[0, 360], y=[0, 0], mode="lines", name=b_label,
                 line=dict(color=baseline_color, width=1.8), showlegend=True)
             try:
                 b_ang_deg, b_val = prepare_angle_value_agg(
-                    self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
+                    self.state.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                 b_val2, _ = self._apply_value_mode(b_val, value_mode)
             except Exception as e:
                 messagebox.showerror(
@@ -1724,14 +1719,14 @@ class DashboardDataPlotter(tk.Tk):
                 return
 
             for sid in self.get_plot_order_source_ids():
-                if not self.show_flag.get(sid, True):
+                if not self.state.show_flag.get(sid, True):
                     continue
                 if sid == baseline_id:
                     continue
-                label = self.id_to_display.get(sid, os.path.basename(sid))
+                label = self.state.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     ang_deg, val = prepare_angle_value_agg(
-                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
+                        self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                     val2, _ = self._apply_value_mode(val, value_mode)
                     base_at = circular_interp_baseline(
                         b_ang_deg, b_val2, ang_deg)
@@ -1803,12 +1798,12 @@ class DashboardDataPlotter(tk.Tk):
         if not compare:
             range_values = []
             for sid in self.get_plot_order_source_ids():
-                if not self.show_flag.get(sid, True):
+                if not self.state.show_flag.get(sid, True):
                     continue
-                label = self.id_to_display.get(sid, os.path.basename(sid))
+                label = self.state.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     ang_deg, val = prepare_angle_value_agg(
-                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
+                        self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                     val2, _ = self._apply_value_mode(val, value_mode)
                     theta = np.asarray(ang_deg, dtype=float)
                     r = np.asarray(val2, dtype=float)
@@ -1855,11 +1850,11 @@ class DashboardDataPlotter(tk.Tk):
                 fig.update_layout(
                     polar=dict(radialaxis=dict(range=[fixed_range[0], fixed_range[1]])))
         else:
-            b_label = self.id_to_display.get(
+            b_label = self.state.id_to_display.get(
                 baseline_id, os.path.basename(baseline_id))
             try:
                 b_ang_deg, b_val = prepare_angle_value_agg(
-                    self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
+                    self.state.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                 b_val2, _ = self._apply_value_mode(b_val, value_mode)
             except Exception as e:
                 messagebox.showerror(
@@ -1871,14 +1866,14 @@ class DashboardDataPlotter(tk.Tk):
             range_values = []
 
             for sid in self.get_plot_order_source_ids():
-                if not self.show_flag.get(sid, True):
+                if not self.state.show_flag.get(sid, True):
                     continue
                 if sid == baseline_id:
                     continue
-                label = self.id_to_display.get(sid, os.path.basename(sid))
+                label = self.state.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     ang_deg, val = prepare_angle_value_agg(
-                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
+                        self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                     val2, _ = self._apply_value_mode(val, value_mode)
                     base_at = circular_interp_baseline(
                         b_ang_deg, b_val2, ang_deg)
@@ -1923,7 +1918,7 @@ class DashboardDataPlotter(tk.Tk):
                 name=b_label)
 
             for sid, (ang_deg2, delta2) in deltas_by_id.items():
-                label = self.id_to_display.get(sid, os.path.basename(sid))
+                label = self.state.id_to_display.get(sid, os.path.basename(sid))
                 theta = np.asarray(ang_deg2, dtype=float)
                 r = np.asarray(delta2 + offset, dtype=float)
                 if close_loop and len(theta) > 2:
@@ -1982,7 +1977,7 @@ class DashboardDataPlotter(tk.Tk):
                 "Partial plot", f"Plotted {plotted} trace(s) with errors.\n\n" + "\n".join(errors))
 
     def plot(self):
-        if not self.loaded:
+        if not self.state.loaded:
             messagebox.showinfo(
                 "No data", "Load at least one dataset first (file or paste).")
             return
@@ -2008,9 +2003,9 @@ class DashboardDataPlotter(tk.Tk):
 
         compare = bool(self.compare_var.get())
         baseline_display = self.baseline_display_var.get().strip()
-        baseline_id = self.display_to_id.get(baseline_display, "")
+        baseline_id = self.state.display_to_id.get(baseline_display, "")
 
-        if compare and (not baseline_id or baseline_id not in self.loaded):
+        if compare and (not baseline_id or baseline_id not in self.state.loaded):
             messagebox.showinfo("Baseline required",
                                 "Select a valid baseline dataset.")
             return
@@ -2084,36 +2079,36 @@ class DashboardDataPlotter(tk.Tk):
             b_strokes = None
             b_roll = None
             if compare:
-                b_label = self.id_to_display.get(
+                b_label = self.state.id_to_display.get(
                     baseline_id, os.path.basename(baseline_id))
                 if agg_mode == "pedal_stroke":
                     _, b_vals = self._pedal_stroke_series(
-                        self.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
+                        self.state.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
                     b_val2, _ = self._apply_value_mode(b_vals, value_mode)
                     b_strokes = b_val2
                 elif agg_mode == "roll_360deg":
                     _, b_vals = self._roll_360_series(
-                        self.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
+                        self.state.loaded[baseline_id], metric_col, sentinels, outlier_threshold)
                     b_val2, _ = self._apply_value_mode(b_vals, value_mode)
                     b_roll = b_val2
                 else:
                     b_vals = sanitize_numeric(
-                        self.loaded[baseline_id][metric_col], sentinels)
+                        self.state.loaded[baseline_id][metric_col], sentinels)
                     if outlier_threshold is not None:
                         b_vals = filter_outliers_mad(b_vals, outlier_threshold)
                     b_val2, _ = self._apply_value_mode(
                         b_vals.to_numpy(dtype=float), value_mode)
 
             for sid in self.get_plot_order_source_ids():
-                if not self.show_flag.get(sid, True):
+                if not self.state.show_flag.get(sid, True):
                     continue
                 if compare and sid == baseline_id:
                     continue
-                label = self.id_to_display.get(sid, os.path.basename(sid))
+                label = self.state.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     if agg_mode == "pedal_stroke":
                         t, vals = self._pedal_stroke_series(
-                            self.loaded[sid], metric_col, sentinels, outlier_threshold)
+                            self.state.loaded[sid], metric_col, sentinels, outlier_threshold)
                         val2, _ = self._apply_value_mode(vals, value_mode)
                         if compare:
                             if b_strokes is None:
@@ -2128,7 +2123,7 @@ class DashboardDataPlotter(tk.Tk):
                             y = val2
                     elif agg_mode == "roll_360deg":
                         t, vals = self._roll_360_series(
-                            self.loaded[sid], metric_col, sentinels, outlier_threshold)
+                            self.state.loaded[sid], metric_col, sentinels, outlier_threshold)
                         val2, _ = self._apply_value_mode(vals, value_mode)
                         if compare:
                             if b_roll is None:
@@ -2143,7 +2138,7 @@ class DashboardDataPlotter(tk.Tk):
                             y = val2
                     else:
                         vals = sanitize_numeric(
-                            self.loaded[sid][metric_col], sentinels)
+                            self.state.loaded[sid][metric_col], sentinels)
                         if outlier_threshold is not None:
                             vals = filter_outliers_mad(vals, outlier_threshold)
                         val2, _ = self._apply_value_mode(
@@ -2249,21 +2244,21 @@ class DashboardDataPlotter(tk.Tk):
             for sid in self.get_plot_order_source_ids():
                 if compare and sid == baseline_id:
                     ordered.append(sid)
-                elif self.show_flag.get(sid, True):
+                elif self.state.show_flag.get(sid, True):
                     ordered.append(sid)
             if compare and baseline_id and baseline_id not in ordered:
                 ordered.append(baseline_id)
 
             if compare:
                 baseline_mean = aggregate_metric(
-                    self.loaded[baseline_id][metric_col], sentinels, agg_mode, outlier_threshold)
+                    self.state.loaded[baseline_id][metric_col], sentinels, agg_mode, outlier_threshold)
 
             labels, heights, errors, bar_colors = [], [], [], []
             for sid in ordered:
-                label = self.id_to_display.get(sid, os.path.basename(sid))
+                label = self.state.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     mval = aggregate_metric(
-                        self.loaded[sid][metric_col], sentinels, agg_mode, outlier_threshold)
+                        self.state.loaded[sid][metric_col], sentinels, agg_mode, outlier_threshold)
                     heights.append(0.0 if compare and sid == baseline_id else (
                         mval - baseline_mean if compare else mval))
                     labels.append(label)
@@ -2295,7 +2290,7 @@ class DashboardDataPlotter(tk.Tk):
             }.get(str(agg_mode).lower(), "Mean")
             mode_str = "absolute" if value_mode == "absolute" else "% of mean"
             if compare:
-                b_label = self.id_to_display.get(baseline_id, baseline_display)
+                b_label = self.state.id_to_display.get(baseline_id, baseline_display)
                 baseline_label = b_label
                 self.ax.set_title(
                     f"{agg_label} {metric_col} difference vs baseline {b_label} ({mode_str})")
@@ -2346,12 +2341,12 @@ class DashboardDataPlotter(tk.Tk):
 
             if not compare:
                 for sid in self.get_plot_order_source_ids():
-                    if not self.show_flag.get(sid, True):
+                    if not self.state.show_flag.get(sid, True):
                         continue
-                    label = self.id_to_display.get(sid, os.path.basename(sid))
+                    label = self.state.id_to_display.get(sid, os.path.basename(sid))
                     try:
                         ang_deg, val = prepare_angle_value_agg(
-                            self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
+                            self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                         val2, _ = self._apply_value_mode(val, value_mode)
                         m = np.isfinite(ang_deg) & np.isfinite(val2)
                         ang_deg2 = ang_deg[m]
@@ -2374,12 +2369,12 @@ class DashboardDataPlotter(tk.Tk):
                 self.ax.set_title(f"{agg_label} {metric_col} ({mode_str})")
                 self.ax.set_ylabel(metric_col)
             else:
-                b_label = self.id_to_display.get(
+                b_label = self.state.id_to_display.get(
                     baseline_id, os.path.basename(baseline_id))
                 baseline_label = b_label
                 try:
                     b_ang_deg, b_val = prepare_angle_value_agg(
-                        self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
+                        self.state.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                     b_val2, _ = self._apply_value_mode(b_val, value_mode)
                 except Exception as e:
                     messagebox.showerror(
@@ -2387,15 +2382,15 @@ class DashboardDataPlotter(tk.Tk):
                     return
 
                 for sid in self.get_plot_order_source_ids():
-                    if not self.show_flag.get(sid, True):
+                    if not self.state.show_flag.get(sid, True):
                         continue
                     if sid == baseline_id:
                         continue
-                    label = self.id_to_display.get(
+                    label = self.state.id_to_display.get(
                         sid, os.path.basename(sid))
                     try:
                         ang_deg, val = prepare_angle_value_agg(
-                            self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
+                            self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                         val2, _ = self._apply_value_mode(val, value_mode)
                         base_at = circular_interp_baseline(
                             b_ang_deg, b_val2, ang_deg)
@@ -2496,12 +2491,12 @@ class DashboardDataPlotter(tk.Tk):
 
         if not compare:
             for sid in self.get_plot_order_source_ids():
-                if not self.show_flag.get(sid, True):
+                if not self.state.show_flag.get(sid, True):
                     continue
-                label = self.id_to_display.get(sid, os.path.basename(sid))
+                label = self.state.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     ang_deg, val = prepare_angle_value_agg(
-                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
+                        self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                     val2, _ = self._apply_value_mode(val, value_mode)
 
                     theta = np.deg2rad(ang_deg)
@@ -2533,11 +2528,11 @@ class DashboardDataPlotter(tk.Tk):
             fmt_abs_ticks(self.ax)
 
         else:
-            b_label = self.id_to_display.get(
+            b_label = self.state.id_to_display.get(
                 baseline_id, os.path.basename(baseline_id))
             try:
                 b_ang_deg, b_val = prepare_angle_value_agg(
-                    self.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
+                    self.state.loaded[baseline_id], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                 b_val2, _ = self._apply_value_mode(b_val, value_mode)
             except Exception as e:
                 messagebox.showerror(
@@ -2547,14 +2542,14 @@ class DashboardDataPlotter(tk.Tk):
             deltas_by_id = {}
             max_abs = 0.0
             for sid in self.get_plot_order_source_ids():
-                if not self.show_flag.get(sid, True):
+                if not self.state.show_flag.get(sid, True):
                     continue
                 if sid == baseline_id:
                     continue
-                label = self.id_to_display.get(sid, os.path.basename(sid))
+                label = self.state.id_to_display.get(sid, os.path.basename(sid))
                 try:
                     ang_deg, val = prepare_angle_value_agg(
-                        self.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
+                        self.state.loaded[sid], angle_col, metric_col, sentinels, agg_mode, outlier_threshold)
                     val2, _ = self._apply_value_mode(val, value_mode)
                     base_at = circular_interp_baseline(
                         b_ang_deg, b_val2, ang_deg)
@@ -2591,7 +2586,7 @@ class DashboardDataPlotter(tk.Tk):
                          color=baseline_color, label=b_label)
 
             for sid, (ang_deg2, delta2) in deltas_by_id.items():
-                label = self.id_to_display.get(sid, os.path.basename(sid))
+                label = self.state.id_to_display.get(sid, os.path.basename(sid))
                 theta = np.deg2rad(ang_deg2)
                 r = delta2 + offset
                 if close_loop and len(theta) > 2:

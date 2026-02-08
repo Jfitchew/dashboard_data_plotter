@@ -204,6 +204,8 @@ def _ensure_session_state() -> None:
         st.session_state.plot_history_index = -1
     if "auto_plot" not in st.session_state:
         st.session_state.auto_plot = False
+    if "plot_request" not in st.session_state:
+        st.session_state.plot_request = False
     if "pending_plot_snapshot" not in st.session_state:
         st.session_state.pending_plot_snapshot = None
 
@@ -316,7 +318,7 @@ def _render_dataset_controls() -> None:
                 reorder_datasets(state, order)
 
 
-def _render_plot_controls() -> None:
+def _render_plot_controls_panel() -> None:
     state: ProjectState = st.session_state.project_state
     cols = _collect_columns()
     if not cols:
@@ -343,7 +345,7 @@ def _render_plot_controls() -> None:
     _setdefault_state("compare", False)
     _setdefault_state("baseline_display", "")
 
-    st.subheader("Plot")
+    st.markdown("**Plot settings**")
     plot_type_options = ["Radar", "Cartesian", "Bar", "Time series"]
     if st.session_state.plot_type not in plot_type_options:
         st.session_state.plot_type = plot_type_options[0]
@@ -474,179 +476,223 @@ def _render_plot_controls() -> None:
         st.rerun()
 
     do_plot = plot_pressed or st.session_state.auto_plot
+    st.session_state.plot_request = do_plot
     if do_plot:
         st.session_state.auto_plot = False
-        fixed_range = None
-        if range_fixed:
-            low_s = range_low.strip()
-            high_s = range_high.strip()
-            if not low_s or not high_s:
-                st.error("Enter both Range min and Range max, or untick Fixed.")
-                return
-            try:
-                low_v = float(low_s)
-                high_v = float(high_s)
-            except ValueError:
-                st.error("Range values must be valid numbers.")
-                return
-            if not (math.isfinite(low_v) and math.isfinite(high_v)):
-                st.error("Range values must be finite numbers.")
-                return
-            if low_v > high_v:
-                st.error("Range min must be less than or equal to Range max.")
-                return
-            fixed_range = (low_v, high_v)
+        if plot_pressed:
+            snapshot = _snapshot_plot_settings(
+                plot_type=plot_type,
+                angle_col=angle_col,
+                close_loop=close_loop,
+                metric_col=metric_col,
+                agg_label=agg_label,
+                sentinels_str=sentinels_str,
+                value_mode=value_mode,
+                range_low=range_low,
+                range_high=range_high,
+                range_fixed=range_fixed,
+                remove_outliers=remove_outliers,
+                outlier_threshold=outlier_threshold,
+                radar_background=radar_background,
+                compare=compare,
+                baseline_display=baseline_display,
+            )
+            if st.session_state.plot_history_index < len(history) - 1:
+                del history[st.session_state.plot_history_index + 1:]
+            history.append(snapshot)
+            st.session_state.plot_history_index = len(history) - 1
+            st.session_state.auto_plot = True
+            st.rerun()
 
-        resolved_outlier_threshold = None
-        if remove_outliers:
-            try:
-                resolved_outlier_threshold = float(outlier_threshold)
-            except ValueError:
-                st.error("Outlier threshold must be a valid number.")
-                return
 
+def _render_plot_output() -> None:
+    state: ProjectState = st.session_state.project_state
+    cols = _collect_columns()
+    if not cols:
+        st.warning("No columns found in datasets.")
+        return
+
+    if not st.session_state.get("plot_request"):
+        return
+    st.session_state.plot_request = False
+
+    plot_type = st.session_state.plot_type
+    angle_col = st.session_state.angle_col
+    close_loop = st.session_state.close_loop
+    metric_col = st.session_state.metric_col
+    agg_label = st.session_state.agg_label
+    sentinels_str = st.session_state.sentinels_str
+    value_mode = st.session_state.value_mode
+    range_low = st.session_state.range_low
+    range_high = st.session_state.range_high
+    range_fixed = st.session_state.range_fixed
+    remove_outliers = st.session_state.remove_outliers
+    outlier_threshold = st.session_state.outlier_threshold
+    radar_background = st.session_state.radar_background
+    compare = st.session_state.compare
+    baseline_display = st.session_state.baseline_display
+
+    agg_map = {
+        "mean": "mean",
+        "median": "median",
+        "10% trimmed mean": "trimmed_mean_10",
+        "pedal_stroke": "pedal_stroke",
+        "roll_360deg": "roll_360deg",
+    }
+    agg_key = agg_map.get(agg_label, "mean")
+    sentinels = parse_sentinels(sentinels_str)
+
+    fixed_range = None
+    if range_fixed:
+        low_s = range_low.strip()
+        high_s = range_high.strip()
+        if not low_s or not high_s:
+            st.error("Enter both Range min and Range max, or untick Fixed.")
+            return
         try:
-            if plot_type == "Radar":
-                data = prepare_radar_plot(
-                    state,
-                    angle_col=angle_col,
-                    metric_col=metric_col,
-                    agg_mode=agg_key,
-                    value_mode=value_mode,
-                    compare=compare,
-                    baseline_id=baseline_id,
-                    sentinels=sentinels,
-                    outlier_threshold=resolved_outlier_threshold,
-                    close_loop=close_loop,
-                )
-                fig = go.Figure()
-                for trace in data.traces:
-                    fig.add_trace(go.Scatterpolar(
-                        r=trace.y,
-                        theta=trace.x,
-                        mode="lines+markers",
-                        name=trace.label,
-                    ))
-                if radar_background:
-                    _apply_radar_background_plotly(fig)
-                if fixed_range:
-                    if compare:
-                        low, high = fixed_range
-                        fixed_range = (low + data.offset, high + data.offset)
-                polar_kwargs = dict(angularaxis=dict(direction="clockwise", rotation=90))
-                if fixed_range:
-                    polar_kwargs["radialaxis"] = dict(range=list(fixed_range))
-                fig.update_layout(
-                    title=f"{metric_col} ({data.mode_label})",
-                    polar=polar_kwargs,
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            elif plot_type == "Cartesian":
-                data = prepare_cartesian_plot(
-                    state,
-                    angle_col=angle_col,
-                    metric_col=metric_col,
-                    agg_mode=agg_key,
-                    value_mode=value_mode,
-                    compare=compare,
-                    baseline_id=baseline_id,
-                    sentinels=sentinels,
-                    outlier_threshold=resolved_outlier_threshold,
-                    close_loop=close_loop,
-                )
-                fig = go.Figure()
-                for trace in data.traces:
-                    fig.add_scatter(x=trace.x, y=trace.y, mode="lines+markers", name=trace.label)
-                if radar_background:
-                    _apply_cartesian_background_plotly(fig)
-                layout_kwargs = dict(title=f"{metric_col} ({data.mode_label})", xaxis_title="Crank angle (deg)")
-                if fixed_range:
-                    layout_kwargs["yaxis"] = dict(range=list(fixed_range))
-                fig.update_layout(**layout_kwargs)
-                if compare:
-                    fig.add_hline(y=0, line_width=2, line_dash="solid", line_color="black")
-                st.plotly_chart(fig, use_container_width=True)
-            elif plot_type == "Bar":
-                data = prepare_bar_plot(
-                    state,
-                    metric_col=metric_col,
-                    agg_mode=agg_key,
-                    value_mode="absolute",
-                    compare=compare,
-                    baseline_id=baseline_id,
-                    sentinels=sentinels,
-                    outlier_threshold=resolved_outlier_threshold,
-                )
-                fig = go.Figure(data=[go.Bar(x=data.labels, y=data.values)])
-                layout_kwargs = dict(title=f"{metric_col}", xaxis_title="Dataset")
-                if fixed_range:
-                    layout_kwargs["yaxis"] = dict(range=list(fixed_range))
-                fig.update_layout(**layout_kwargs)
-                if compare:
-                    fig.add_hline(y=0, line_width=2, line_dash="solid", line_color="black")
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                data = prepare_timeseries_plot(
-                    state,
-                    metric_col=metric_col,
-                    agg_mode=agg_key,
-                    value_mode=value_mode,
-                    compare=compare,
-                    baseline_id=baseline_id,
-                    sentinels=sentinels,
-                    outlier_threshold=resolved_outlier_threshold,
-                )
-                fig = go.Figure()
-                for trace in data.traces:
-                    fig.add_scatter(x=trace.x, y=trace.y, mode="lines+markers", name=trace.label)
-                layout_kwargs = dict(
-                    title=f"{metric_col} ({data.mode_label})",
-                    xaxis_title=data.x_label,
-                    yaxis_title=metric_col,
-                )
-                if fixed_range:
-                    layout_kwargs["yaxis"] = dict(range=list(fixed_range))
-                fig.update_layout(**layout_kwargs)
-                if compare and data.baseline_label:
-                    fig.add_scatter(
-                        x=[0, data.max_x], y=[0, 0], mode="lines",
-                        name=data.baseline_label, line=dict(width=1.6),
-                    )
-                st.plotly_chart(fig, use_container_width=True)
+            low_v = float(low_s)
+            high_v = float(high_s)
+        except ValueError:
+            st.error("Range values must be valid numbers.")
+            return
+        if not (math.isfinite(low_v) and math.isfinite(high_v)):
+            st.error("Range values must be finite numbers.")
+            return
+        if low_v > high_v:
+            st.error("Range min must be less than or equal to Range max.")
+            return
+        fixed_range = (low_v, high_v)
 
-            if plot_type != "Bar" and value_mode == "percent_mean":
-                st.caption("% of mean uses dataset-specific normalization.")
+    resolved_outlier_threshold = None
+    if remove_outliers:
+        try:
+            resolved_outlier_threshold = float(outlier_threshold)
+        except ValueError:
+            st.error("Outlier threshold must be a valid number.")
+            return
 
-            if data.errors:
-                st.warning("Some datasets failed to plot:")
-                for err in data.errors:
-                    st.write(f"- {err}")
-            if plot_pressed:
-                snapshot = _snapshot_plot_settings(
-                    plot_type=plot_type,
-                    angle_col=angle_col,
-                    close_loop=close_loop,
-                    metric_col=metric_col,
-                    agg_label=agg_label,
-                    sentinels_str=sentinels_str,
-                    value_mode=value_mode,
-                    range_low=range_low,
-                    range_high=range_high,
-                    range_fixed=range_fixed,
-                    remove_outliers=remove_outliers,
-                    outlier_threshold=outlier_threshold,
-                    radar_background=radar_background,
-                    compare=compare,
-                    baseline_display=baseline_display,
+    baseline_id = None
+    if compare:
+        baseline_id = state.display_to_id.get(baseline_display)
+
+    try:
+        if plot_type == "Radar":
+            data = prepare_radar_plot(
+                state,
+                angle_col=angle_col,
+                metric_col=metric_col,
+                agg_mode=agg_key,
+                value_mode=value_mode,
+                compare=compare,
+                baseline_id=baseline_id,
+                sentinels=sentinels,
+                outlier_threshold=resolved_outlier_threshold,
+                close_loop=close_loop,
+            )
+            fig = go.Figure()
+            for trace in data.traces:
+                fig.add_trace(go.Scatterpolar(
+                    r=trace.y,
+                    theta=trace.x,
+                    mode="lines+markers",
+                    name=trace.label,
+                ))
+            if radar_background:
+                _apply_radar_background_plotly(fig)
+            if fixed_range:
+                if compare:
+                    low, high = fixed_range
+                    fixed_range = (low + data.offset, high + data.offset)
+            polar_kwargs = dict(angularaxis=dict(direction="clockwise", rotation=90))
+            if fixed_range:
+                polar_kwargs["radialaxis"] = dict(range=list(fixed_range))
+            fig.update_layout(
+                title=f"{metric_col} ({data.mode_label})",
+                polar=polar_kwargs,
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        elif plot_type == "Cartesian":
+            data = prepare_cartesian_plot(
+                state,
+                angle_col=angle_col,
+                metric_col=metric_col,
+                agg_mode=agg_key,
+                value_mode=value_mode,
+                compare=compare,
+                baseline_id=baseline_id,
+                sentinels=sentinels,
+                outlier_threshold=resolved_outlier_threshold,
+                close_loop=close_loop,
+            )
+            fig = go.Figure()
+            for trace in data.traces:
+                fig.add_scatter(x=trace.x, y=trace.y, mode="lines+markers", name=trace.label)
+            if radar_background:
+                _apply_cartesian_background_plotly(fig)
+            layout_kwargs = dict(title=f"{metric_col} ({data.mode_label})", xaxis_title="Crank angle (deg)")
+            if fixed_range:
+                layout_kwargs["yaxis"] = dict(range=list(fixed_range))
+            fig.update_layout(**layout_kwargs)
+            if compare:
+                fig.add_hline(y=0, line_width=2, line_dash="solid", line_color="black")
+            st.plotly_chart(fig, use_container_width=True)
+        elif plot_type == "Bar":
+            data = prepare_bar_plot(
+                state,
+                metric_col=metric_col,
+                agg_mode=agg_key,
+                value_mode="absolute",
+                compare=compare,
+                baseline_id=baseline_id,
+                sentinels=sentinels,
+                outlier_threshold=resolved_outlier_threshold,
+            )
+            fig = go.Figure(data=[go.Bar(x=data.labels, y=data.values)])
+            layout_kwargs = dict(title=f"{metric_col}", xaxis_title="Dataset")
+            if fixed_range:
+                layout_kwargs["yaxis"] = dict(range=list(fixed_range))
+            fig.update_layout(**layout_kwargs)
+            if compare:
+                fig.add_hline(y=0, line_width=2, line_dash="solid", line_color="black")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            data = prepare_timeseries_plot(
+                state,
+                metric_col=metric_col,
+                agg_mode=agg_key,
+                value_mode=value_mode,
+                compare=compare,
+                baseline_id=baseline_id,
+                sentinels=sentinels,
+                outlier_threshold=resolved_outlier_threshold,
+            )
+            fig = go.Figure()
+            for trace in data.traces:
+                fig.add_scatter(x=trace.x, y=trace.y, mode="lines+markers", name=trace.label)
+            layout_kwargs = dict(
+                title=f"{metric_col} ({data.mode_label})",
+                xaxis_title=data.x_label,
+                yaxis_title=metric_col,
+            )
+            if fixed_range:
+                layout_kwargs["yaxis"] = dict(range=list(fixed_range))
+            fig.update_layout(**layout_kwargs)
+            if compare and data.baseline_label:
+                fig.add_scatter(
+                    x=[0, data.max_x], y=[0, 0], mode="lines",
+                    name=data.baseline_label, line=dict(width=1.6),
                 )
-                if st.session_state.plot_history_index < len(history) - 1:
-                    del history[st.session_state.plot_history_index + 1:]
-                history.append(snapshot)
-                st.session_state.plot_history_index = len(history) - 1
-                st.session_state.auto_plot = True
-                st.rerun()
-        except Exception as exc:
-            st.error(str(exc))
+            st.plotly_chart(fig, use_container_width=True)
+
+        if plot_type != "Bar" and value_mode == "percent_mean":
+            st.caption("% of mean uses dataset-specific normalization.")
+
+        if data.errors:
+            st.warning("Some datasets failed to plot:")
+            for err in data.errors:
+                st.write(f"- {err}")
+    except Exception as exc:
+        st.error(str(exc))
 
 
 def _collect_columns() -> List[str]:
@@ -672,12 +718,9 @@ def main() -> None:
     st.caption("Streamlit UI using shared core state and plotting.")
 
     with st.sidebar:
-        step = st.selectbox(
-            "Workflow",
-            ["Load", "Clean", "Align", "Plot", "Analysis", "Report"],
-        )
+        st.markdown("## Workflow")
 
-        if step == "Load":
+        with st.expander("Load", expanded=True):
             st.subheader("Load")
             uploaded = st.file_uploader(
                 "Upload JSON file(s)",
@@ -721,7 +764,7 @@ def main() -> None:
                 mime="application/json",
             )
 
-        elif step == "Clean":
+        with st.expander("Clean", expanded=False):
             st.subheader("Clean")
             st.info("Cleaning config is stored in project settings.")
             st.caption("TODO: Wire these controls to core/cleaning.py (CleaningSettings).")
@@ -729,25 +772,24 @@ def main() -> None:
             st.checkbox("Remove outliers (MAD)", key="clean_outliers")
             st.text_input("Outlier threshold", value="4.0", key="clean_outlier_threshold")
 
-        elif step == "Align":
+        with st.expander("Align", expanded=False):
             st.subheader("Align")
             st.info("Alignment step placeholder (future work).")
 
-        elif step == "Plot":
-            st.subheader("Plot")
-        elif step == "Analysis":
+        with st.expander("Plot", expanded=False):
+            _render_plot_controls_panel()
+
+        with st.expander("Analysis", expanded=False):
             st.subheader("Analysis")
             st.info("Analysis step placeholder (future work).")
             st.caption("TODO: Implement analysis workflows in core/analysis.py and bind UI controls here.")
-        elif step == "Report":
+
+        with st.expander("Report", expanded=False):
             st.subheader("Report")
             st.info("Report step placeholder (future work).")
 
-    if step in ("Load", "Clean"):
-        _render_dataset_controls()
-
-    if step == "Plot":
-        _render_plot_controls()
+    _render_dataset_controls()
+    _render_plot_output()
 
 
 if __name__ == "__main__":

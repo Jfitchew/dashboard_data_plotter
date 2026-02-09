@@ -197,7 +197,7 @@ def filter_outliers_phase_mad(
 def filter_outliers_hampel(
     series: pd.Series,
     threshold: float,
-    window: int = 21,
+    window: int = 11,
 ) -> pd.Series:
     x = pd.to_numeric(series, errors="coerce")
     if window < 3:

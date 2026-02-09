@@ -23,6 +23,7 @@ and resistant to accidental semantic breakage.
 - Saved files include a `__project_settings__` block with plot/cleaning settings, dataset order, and visibility
 - Rename datasets without changing their identity
 - Toggle dataset visibility (Show / Hide)
+- Export the currently displayed plot data to CSV
 
 ### Supported JSON formats
 

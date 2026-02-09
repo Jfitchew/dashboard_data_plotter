@@ -58,6 +58,8 @@ import sys
 import json
 import base64
 from datetime import datetime
+import csv
+import re
 import tempfile
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
@@ -502,15 +504,18 @@ class DashboardDataPlotter(tk.Tk):
             plot_btns, text="Plot / Refresh", command=self.plot)
         self.plot_btn.grid(row=0, column=0, sticky="ew")
         self.plot_btn.configure(style="Red.TButton")
+        self.export_plot_btn = ttk.Button(
+            plot_btns, text="Export Plot Data", command=self.export_plot_data)
+        self.export_plot_btn.grid(row=0, column=1, padx=(10, 0))
         self.prev_btn = ttk.Button(
             plot_btns, text="Prev", command=self._plot_prev, state="disabled", width=5)
-        self.prev_btn.grid(row=0, column=1, padx=(10, 0))
+        self.prev_btn.grid(row=0, column=2, padx=(10, 0))
         self.delete_btn = ttk.Button(
             plot_btns, text="X", command=self._delete_history_entry, state="disabled", width=3)
-        self.delete_btn.grid(row=0, column=2, padx=(2, 0))
+        self.delete_btn.grid(row=0, column=3, padx=(2, 0))
         self.next_btn = ttk.Button(
             plot_btns, text="Next", command=self._plot_next, state="disabled", width=5)
-        self.next_btn.grid(row=0, column=3, padx=(2, 0))
+        self.next_btn.grid(row=0, column=4, padx=(2, 0))
 
         style = ttk.Style()
         style.configure("Red.TButton", background="red", foreground="black")
@@ -708,6 +713,7 @@ class DashboardDataPlotter(tk.Tk):
              "Plot each dataset as a difference from the selected baseline."),
             (self.baseline_combo, "Choose the baseline dataset for comparison mode."),
             (self.plot_btn, "Plot or refresh using current settings."),
+            (self.export_plot_btn, "Export the currently displayed plot data to CSV."),
             (self.prev_btn, "Go to the previous plot in history."),
             (self.delete_btn, "Remove the current plot from history."),
             (self.next_btn, "Go to the next plot in history."),
@@ -2112,6 +2118,203 @@ class DashboardDataPlotter(tk.Tk):
         if data.errors:
             messagebox.showwarning(
                 "Partial plot", f"Plotted {len(data.traces)} trace(s) with errors.\n\n" + "\n".join(data.errors))
+
+    def _sanitize_filename_part(self, value: str) -> str:
+        raw = re.sub(r"[^A-Za-z0-9]+", "_", str(value or "")).strip("_")
+        return raw or "data"
+
+    def _column_name_from_label(self, label: str, default: str) -> str:
+        raw = re.sub(r"[^a-z0-9]+", "_", str(label or "").strip().lower()).strip("_")
+        return raw or default
+
+    def export_plot_data(self):
+        if not self.state.loaded:
+            messagebox.showinfo(
+                "No data", "Load at least one dataset first (file or paste).")
+            return
+
+        angle_col = self.angle_var.get().strip()
+        metric_col = self.metric_var.get().strip()
+        if not metric_col:
+            messagebox.showinfo("Missing selection", "Select a metric column.")
+            return
+
+        self._sync_state_settings_from_ui()
+
+        sentinels = parse_sentinels(self.sentinels_var.get())
+        close_loop = bool(self.close_loop_var.get())
+        value_mode = self.value_mode_var.get()
+        agg_mode = self._normalize_agg_mode(self.agg_var.get())
+        outlier_threshold = self._get_outlier_threshold()
+        if outlier_threshold == "invalid":
+            return
+
+        compare = bool(self.compare_var.get())
+        baseline_display = self.baseline_display_var.get().strip()
+        baseline_id = self.state.display_to_id.get(baseline_display, "")
+
+        if compare and (not baseline_id or baseline_id not in self.state.loaded):
+            messagebox.showinfo("Baseline required",
+                                "Select a valid baseline dataset.")
+            return
+
+        plot_type = (self.plot_type_var.get() or "radar").strip().lower()
+        if plot_type == "bar" and value_mode == "percent_mean":
+            value_mode = "absolute"
+
+        if plot_type in ("radar", "cartesian") and not angle_col:
+            messagebox.showinfo(
+                "Missing selection", "Select an angle column (required for Radar/Cartesian plots).")
+            return
+
+        rows = []
+        headers = []
+        errors = []
+        y_label = "delta_vs_baseline" if compare else "value"
+
+        try:
+            if plot_type == "bar":
+                data = prepare_bar_plot(
+                    self.state,
+                    metric_col=metric_col,
+                    agg_mode=agg_mode,
+                    value_mode=value_mode,
+                    compare=compare,
+                    baseline_id=baseline_id,
+                    sentinels=sentinels,
+                    outlier_threshold=outlier_threshold,
+                )
+                if not data.labels:
+                    messagebox.showinfo("Nothing to export",
+                                        "No datasets produced valid bar values.")
+                    return
+                headers = ["dataset", y_label]
+                for label, value in zip(data.labels, data.values):
+                    rows.append([label, value])
+                errors = data.errors
+
+            elif plot_type == "timeseries":
+                data = prepare_timeseries_plot(
+                    self.state,
+                    metric_col=metric_col,
+                    agg_mode=agg_mode,
+                    value_mode=value_mode,
+                    compare=compare,
+                    baseline_id=baseline_id,
+                    sentinels=sentinels,
+                    outlier_threshold=outlier_threshold,
+                )
+                if not data.traces:
+                    messagebox.showinfo("Nothing to export",
+                                        "No datasets produced valid time series values.")
+                    return
+                x_label = self._column_name_from_label(data.x_label, "x")
+                headers = ["dataset", x_label, y_label]
+                for trace in data.traces:
+                    for x, y in zip(trace.x, trace.y):
+                        rows.append([trace.label, x, y])
+                errors = data.errors
+
+            elif plot_type == "cartesian":
+                data = prepare_cartesian_plot(
+                    self.state,
+                    angle_col=angle_col,
+                    metric_col=metric_col,
+                    agg_mode=agg_mode,
+                    value_mode=value_mode,
+                    compare=compare,
+                    baseline_id=baseline_id,
+                    sentinels=sentinels,
+                    outlier_threshold=outlier_threshold,
+                    close_loop=close_loop,
+                )
+                if not data.traces:
+                    messagebox.showinfo("Nothing to export",
+                                        "No datasets produced valid cartesian values.")
+                    return
+                headers = ["dataset", "angle_deg", y_label]
+                for trace in data.traces:
+                    for x, y in zip(trace.x, trace.y):
+                        rows.append([trace.label, x, y])
+                errors = data.errors
+
+            else:
+                data = prepare_radar_plot(
+                    self.state,
+                    angle_col=angle_col,
+                    metric_col=metric_col,
+                    agg_mode=agg_mode,
+                    value_mode=value_mode,
+                    compare=compare,
+                    baseline_id=baseline_id,
+                    sentinels=sentinels,
+                    outlier_threshold=outlier_threshold,
+                    close_loop=close_loop,
+                )
+                if not data.traces:
+                    messagebox.showinfo("Nothing to export",
+                                        "No datasets produced valid radar values.")
+                    return
+                headers = ["dataset", "angle_deg", y_label]
+                for trace in data.traces:
+                    if data.compare:
+                        if trace.is_baseline:
+                            y_values = np.zeros_like(trace.y, dtype=float)
+                        else:
+                            y_values = trace.y - data.offset
+                    else:
+                        y_values = trace.y
+                    for x, y in zip(trace.x, y_values):
+                        rows.append([trace.label, x, y])
+                errors = data.errors
+        except Exception as exc:
+            messagebox.showerror("Export failed", str(exc))
+            return
+
+        if not rows:
+            messagebox.showinfo(
+                "Nothing to export", "No plot data was generated.")
+            return
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        metric_part = self._sanitize_filename_part(metric_col)
+        plot_part = self._sanitize_filename_part(plot_type)
+        default_name = f"plot_data_{plot_part}_{metric_part}_{timestamp}.csv"
+        out_path = filedialog.asksaveasfilename(
+            title="Export plot data",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv")],
+            initialfile=default_name,
+        )
+        if not out_path:
+            return
+
+        def _csv_value(value):
+            if value is None:
+                return ""
+            if isinstance(value, (np.floating, np.integer)):
+                value = value.item()
+            if isinstance(value, float) and (np.isnan(value) or np.isinf(value)):
+                return ""
+            return value
+
+        try:
+            with open(out_path, "w", encoding="utf-8", newline="") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(headers)
+                for row in rows:
+                    writer.writerow([_csv_value(cell) for cell in row])
+        except Exception as exc:
+            messagebox.showerror("Export failed", f"Could not save:\n{exc}")
+            return
+
+        self.status.set(f"Exported {len(rows)} row(s) to {out_path}")
+        if errors:
+            messagebox.showwarning(
+                "Partial export", f"Exported {len(rows)} row(s) with errors.\n\n" + "\n".join(errors))
+        else:
+            messagebox.showinfo(
+                "Export complete", f"Exported {len(rows)} row(s).")
 
     def plot(self):
         if not self.state.loaded:

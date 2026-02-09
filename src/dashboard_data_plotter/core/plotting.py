@@ -158,20 +158,23 @@ def _series_roll_360(
     if ang.size == 0:
         raise ValueError("No valid values after filtering.")
 
+    unwrapped = np.empty_like(ang, dtype=float)
+    offset = 0.0
+    prev = ang[0]
+    unwrapped[0] = prev
+    for idx in range(1, ang.size):
+        a = ang[idx]
+        if prev - a > 180.0:
+            offset += 360.0
+        unwrapped[idx] = a + offset
+        prev = a
+
     out = []
     n = len(val)
     for i in range(n):
-        start_ang = ang[i]
+        target = unwrapped[i] + 360.0
         j = i + 1
-        wrapped = False
-        prev = ang[i]
-        while j < n:
-            a = ang[j]
-            if prev - a > 180.0:
-                wrapped = True
-            if wrapped and a >= start_ang:
-                break
-            prev = a
+        while j < n and unwrapped[j] < target:
             j += 1
         if j >= n:
             break

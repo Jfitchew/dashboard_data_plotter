@@ -57,6 +57,27 @@ def extract_named_datasets(obj: Any) -> List[Tuple[str, List[Dict[str, Any]]]]:
     raise ValueError("Unrecognized JSON structure.")
 
 
+def extract_named_binned_datasets(obj: Any) -> List[Tuple[str, List[Dict[str, Any]]]]:
+    """
+    Extract left_pedalstroke_avg records for each dataset name (if present).
+
+    Returns: list of (name, records_list)
+    """
+    if isinstance(obj, dict):
+        if "left_pedalstroke_avg" in obj and isinstance(obj["left_pedalstroke_avg"], list):
+            return [("Dataset", obj["left_pedalstroke_avg"])]
+
+        out: List[Tuple[str, List[Dict[str, Any]]]] = []
+        for name, v in obj.items():
+            if isinstance(v, dict) and "left_pedalstroke_avg" in v and isinstance(
+                v["left_pedalstroke_avg"], list
+            ):
+                out.append((str(name), v["left_pedalstroke_avg"]))
+        return out
+
+    return []
+
+
 def load_json_file_datasets(path: str) -> List[Tuple[str, pd.DataFrame]]:
     """
     Load a JSON file that may contain either:

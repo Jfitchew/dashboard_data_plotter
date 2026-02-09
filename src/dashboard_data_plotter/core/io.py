@@ -47,6 +47,7 @@ def build_project_settings(state: ProjectState) -> dict[str, Any]:
             "close_loop": plot.close_loop,
             "use_plotly": plot.use_plotly,
             "radar_background": plot.radar_background,
+            "use_original_binned": plot.use_original_binned,
             "range_low": plot.range_low,
             "range_high": plot.range_high,
             "range_fixed": plot.range_fixed,
@@ -101,6 +102,8 @@ def apply_project_settings(state: ProjectState, settings: dict[str, Any]) -> Non
             state.plot_settings.use_plotly = bool(plot.get("use_plotly"))
         if "radar_background" in plot:
             state.plot_settings.radar_background = bool(plot.get("radar_background"))
+        if "use_original_binned" in plot:
+            state.plot_settings.use_original_binned = bool(plot.get("use_original_binned"))
         if "range_low" in plot:
             state.plot_settings.range_low = str(plot.get("range_low") or "")
         if "range_high" in plot:

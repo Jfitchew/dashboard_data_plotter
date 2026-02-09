@@ -45,6 +45,7 @@ def remove_dataset(state: ProjectState, source_id: str) -> None:
     if display is not None and state.display_to_id.get(display) == source_id:
         state.display_to_id.pop(display, None)
     state.loaded.pop(source_id, None)
+    state.binned.pop(source_id, None)
     state.show_flag.pop(source_id, None)
     if source_id in state.dataset_order:
         state.dataset_order.remove(source_id)

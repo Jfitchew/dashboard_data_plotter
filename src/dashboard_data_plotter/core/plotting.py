@@ -247,6 +247,27 @@ def _resolve_plot_inputs(
     return angle_col, metric_col, agg_mode, value_mode, compare, baseline_id
 
 
+def _resolve_use_original_binned(
+    state: ProjectState,
+    use_original_binned: Optional[bool] = None,
+) -> bool:
+    if use_original_binned is not None:
+        return bool(use_original_binned)
+    return bool(state.plot_settings.use_original_binned)
+
+
+def _get_plot_df(
+    state: ProjectState,
+    source_id: str,
+    use_original_binned: bool,
+) -> "pd.DataFrame":
+    if use_original_binned:
+        binned = state.binned.get(source_id)
+        if binned is not None and not binned.empty:
+            return binned
+    return state.loaded[source_id]
+
+
 def prepare_radar_plot(
     state: ProjectState,
     *,
@@ -260,6 +281,7 @@ def prepare_radar_plot(
     outlier_threshold: Optional[float] = None,
     outlier_method: Optional[str] = None,
     close_loop: Optional[bool] = None,
+    use_original_binned: Optional[bool] = None,
 ) -> RadarPlotData:
     angle_col, metric_col, agg_mode, value_mode, compare, baseline_id = _resolve_plot_inputs(
         state, angle_col, metric_col, agg_mode, value_mode, compare, baseline_id
@@ -272,6 +294,7 @@ def prepare_radar_plot(
     outlier_threshold = _resolve_outlier_threshold(state, outlier_threshold)
     outlier_method = _resolve_outlier_method(state, outlier_method)
     close_loop = bool(close_loop) if close_loop is not None else bool(state.plot_settings.close_loop)
+    use_original_binned = _resolve_use_original_binned(state, use_original_binned)
 
     data = RadarPlotData(
         mode_label="absolute" if value_mode == "absolute" else "% of mean",
@@ -286,8 +309,9 @@ def prepare_radar_plot(
             raise ValueError("Baseline dataset is required for comparison.")
         b_label = state.id_to_display.get(baseline_id, baseline_id)
         data.baseline_label = b_label
+        baseline_df = _get_plot_df(state, baseline_id, use_original_binned)
         b_ang, b_val = prepare_angle_value_agg(
-            state.loaded[baseline_id],
+            baseline_df,
             angle_col,
             metric_col,
             sentinels,
@@ -306,8 +330,9 @@ def prepare_radar_plot(
                 continue
             label = state.id_to_display.get(sid, sid)
             try:
+                plot_df = _get_plot_df(state, sid, use_original_binned)
                 ang, val = prepare_angle_value_agg(
-                    state.loaded[sid],
+                    plot_df,
                     angle_col,
                     metric_col,
                     sentinels,
@@ -358,8 +383,9 @@ def prepare_radar_plot(
             continue
         label = state.id_to_display.get(sid, sid)
         try:
+            plot_df = _get_plot_df(state, sid, use_original_binned)
             ang, val = prepare_angle_value_agg(
-                state.loaded[sid],
+                plot_df,
                 angle_col,
                 metric_col,
                 sentinels,
@@ -391,6 +417,7 @@ def prepare_cartesian_plot(
     outlier_threshold: Optional[float] = None,
     outlier_method: Optional[str] = None,
     close_loop: Optional[bool] = None,
+    use_original_binned: Optional[bool] = None,
 ) -> CartesianPlotData:
     angle_col, metric_col, agg_mode, value_mode, compare, baseline_id = _resolve_plot_inputs(
         state, angle_col, metric_col, agg_mode, value_mode, compare, baseline_id
@@ -403,6 +430,7 @@ def prepare_cartesian_plot(
     outlier_threshold = _resolve_outlier_threshold(state, outlier_threshold)
     outlier_method = _resolve_outlier_method(state, outlier_method)
     close_loop = bool(close_loop) if close_loop is not None else bool(state.plot_settings.close_loop)
+    use_original_binned = _resolve_use_original_binned(state, use_original_binned)
 
     data = CartesianPlotData(
         mode_label="absolute" if value_mode == "absolute" else "% of mean",
@@ -417,8 +445,9 @@ def prepare_cartesian_plot(
             raise ValueError("Baseline dataset is required for comparison.")
         b_label = state.id_to_display.get(baseline_id, baseline_id)
         data.baseline_label = b_label
+        baseline_df = _get_plot_df(state, baseline_id, use_original_binned)
         b_ang, b_val = prepare_angle_value_agg(
-            state.loaded[baseline_id],
+            baseline_df,
             angle_col,
             metric_col,
             sentinels,
@@ -435,8 +464,9 @@ def prepare_cartesian_plot(
                 continue
             label = state.id_to_display.get(sid, sid)
             try:
+                plot_df = _get_plot_df(state, sid, use_original_binned)
                 ang, val = prepare_angle_value_agg(
-                    state.loaded[sid],
+                    plot_df,
                     angle_col,
                     metric_col,
                     sentinels,
@@ -468,8 +498,9 @@ def prepare_cartesian_plot(
             continue
         label = state.id_to_display.get(sid, sid)
         try:
+            plot_df = _get_plot_df(state, sid, use_original_binned)
             ang, val = prepare_angle_value_agg(
-                state.loaded[sid],
+                plot_df,
                 angle_col,
                 metric_col,
                 sentinels,
@@ -502,6 +533,7 @@ def prepare_bar_plot(
     sentinels: Optional[Iterable[float]] = None,
     outlier_threshold: Optional[float] = None,
     outlier_method: Optional[str] = None,
+    use_original_binned: Optional[bool] = None,
 ) -> BarPlotData:
     _, metric_col, agg_mode, value_mode, compare, baseline_id = _resolve_plot_inputs(
         state, None, metric_col, agg_mode, value_mode, compare, baseline_id
@@ -513,6 +545,7 @@ def prepare_bar_plot(
     sentinels = _resolve_sentinels(state, sentinels)
     outlier_threshold = _resolve_outlier_threshold(state, outlier_threshold)
     outlier_method = _resolve_outlier_method(state, outlier_method)
+    use_original_binned = _resolve_use_original_binned(state, use_original_binned)
 
     data = BarPlotData(
         mode_label="absolute",
@@ -528,8 +561,9 @@ def prepare_bar_plot(
             raise ValueError("Baseline dataset is required for comparison.")
         baseline_label = state.id_to_display.get(baseline_id, baseline_id)
         data.baseline_label = baseline_label
+        baseline_df = _get_plot_df(state, baseline_id, use_original_binned)
         baseline_value = aggregate_metric(
-            state.loaded[baseline_id][metric_col],
+            baseline_df[metric_col],
             sentinels,
             agg=agg_mode,
             outlier_threshold=outlier_threshold,
@@ -548,8 +582,9 @@ def prepare_bar_plot(
     for sid in ordered_ids:
         label = state.id_to_display.get(sid, sid)
         try:
+            plot_df = _get_plot_df(state, sid, use_original_binned)
             val = aggregate_metric(
-                state.loaded[sid][metric_col],
+                plot_df[metric_col],
                 sentinels,
                 agg=agg_mode,
                 outlier_threshold=outlier_threshold,

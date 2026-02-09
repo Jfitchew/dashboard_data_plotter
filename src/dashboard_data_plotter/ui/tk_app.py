@@ -14,6 +14,7 @@ from dashboard_data_plotter.core.state import (
     set_value_mode,
     set_compare,
     set_baseline,
+    set_use_original_binned,
     update_cleaning_settings,
 )
 from dashboard_data_plotter.core.datasets import (
@@ -40,6 +41,8 @@ from dashboard_data_plotter.core.plotting import (
 from dashboard_data_plotter.data.loaders import (
     DEFAULT_SENTINELS,
     extract_named_datasets,
+    extract_named_binned_datasets,
+    load_json_file_obj,
     make_unique_name,
     parse_sentinels,
     prepare_angle_value,
@@ -173,6 +176,7 @@ class DashboardDataPlotter(tk.Tk):
         self.range_low_var = tk.StringVar(value="")
         self.range_high_var = tk.StringVar(value="")
         self.range_fixed_var = tk.BooleanVar(value=False)
+        self.use_original_binned_var = tk.BooleanVar(value=False)
 
         # Comparison mode
         self.compare_var = tk.BooleanVar(value=False)
@@ -245,15 +249,15 @@ class DashboardDataPlotter(tk.Tk):
         self.btn_add_files = ttk.Button(
             btns, text="Add JSON file(s)...", command=self.add_files)
         self.btn_add_files.grid(row=0, column=0, sticky="ew")
-        self.btn_clear_all = ttk.Button(
-            btns, text="Clear all", command=self.clear_all, width=8)
-        self.btn_clear_all.grid(row=0, column=1, padx=(6, 0))
         self.btn_save_all = ttk.Button(
             btns, text="Save all", command=self.save_all_datasets, width=8)
-        self.btn_save_all.grid(row=0, column=2, padx=(6, 0))
+        self.btn_save_all.grid(row=0, column=1, padx=(6, 0))
         self.btn_remove = ttk.Button(
             btns, text="Remove", command=self.remove_selected, width=8)
-        self.btn_remove.grid(row=0, column=3, padx=(6, 0))
+        self.btn_remove.grid(row=0, column=2, padx=(6, 0))
+        self.btn_clear_all = ttk.Button(
+            btns, text="Clear all", command=self.clear_all, width=8)
+        self.btn_clear_all.grid(row=0, column=3, padx=(6, 0))
         self.btn_rename = ttk.Button(
             btns, text="Rename", command=self.rename_selected, width=8)
         self.btn_rename.grid(row=0, column=4, padx=(6, 0))
@@ -461,6 +465,10 @@ class DashboardDataPlotter(tk.Tk):
         self.range_fixed_chk = ttk.Checkbutton(
             range_frame, text="Fixed", variable=self.range_fixed_var)
         self.range_fixed_chk.grid(row=0, column=3, sticky="w", padx=(8, 0))
+        self.original_binned_btn = ttk.Button(
+            range_frame, text="Original Dashboard Bins", command=self._on_original_binned_toggle)
+        self.original_binned_btn.grid(
+            row=0, column=4, sticky="w", padx=(20, 0))
 
         ttk.Separator(left).grid(row=12, column=0, sticky="ew", pady=10)
 
@@ -555,6 +563,7 @@ class DashboardDataPlotter(tk.Tk):
         baseline_id = self.state.display_to_id.get(baseline_display, "")
         set_baseline(
             self.state, baseline_id if baseline_id in self.state.loaded else "")
+        set_use_original_binned(self.state, self.use_original_binned_var.get())
         sentinels = parse_sentinels(self.sentinels_var.get())
         outlier_threshold = None
         if self.remove_outliers_var.get():
@@ -584,6 +593,18 @@ class DashboardDataPlotter(tk.Tk):
             out.append((str(name), df))
         return out
 
+    def _binned_from_json_obj(self, obj):
+        datasets = extract_named_binned_datasets(obj)
+        out = {}
+        for name, records in datasets:
+            if not isinstance(records, list) or (len(records) > 0 and not isinstance(records[0], dict)):
+                continue
+            df = pd.DataFrame(records)
+            for c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+            out[str(name)] = df
+        return out
+
     def _sync_ui_from_state_settings(self):
         plot = self.state.plot_settings
         cleaning = self.state.cleaning_settings
@@ -605,6 +626,8 @@ class DashboardDataPlotter(tk.Tk):
         self.range_low_var.set(str(plot.range_low or ""))
         self.range_high_var.set(str(plot.range_high or ""))
         self.range_fixed_var.set(bool(plot.range_fixed))
+        self.use_original_binned_var.set(bool(plot.use_original_binned))
+        self._update_original_binned_label()
 
         if cleaning.sentinels:
             self.sentinels_var.set(", ".join(str(v)
@@ -707,6 +730,9 @@ class DashboardDataPlotter(tk.Tk):
              "Does not change or filter the data."),
             (self.range_fixed_chk,
              "Lock the y-range to the chosen values\n(easier to compare different plots)."),
+            (self.original_binned_btn,
+             "Use the pre-binned 52-row left_pedalstroke_avg data\n"
+             "when available (radar/cartesian/bar only)."),
             (self.rb_absolute, "Plot absolute metric values."),
             (self.rb_percent_mean,
              "Plot values as percent of dataset mean (radar/cartesian only)."),
@@ -757,6 +783,36 @@ class DashboardDataPlotter(tk.Tk):
             )
         except Exception:
             pass
+        try:
+            self.original_binned_btn.configure(
+                state="disabled" if plot_type == "timeseries" else "normal"
+            )
+        except Exception:
+            pass
+        if plot_type == "timeseries":
+            self.use_original_binned_var.set(False)
+            self._update_original_binned_label()
+
+    def _update_original_binned_label(self):
+        if not hasattr(self, "original_binned_btn"):
+            return
+        if self.use_original_binned_var.get():
+            self.original_binned_btn.configure(text="Original ✓")
+        else:
+            self.original_binned_btn.configure(text="Original")
+
+    def _on_original_binned_toggle(self):
+        if (self.plot_type_var.get() or "").strip().lower() == "timeseries":
+            self.use_original_binned_var.set(False)
+            self._update_original_binned_label()
+            return
+        self.use_original_binned_var.set(
+            not self.use_original_binned_var.get())
+        self._update_original_binned_label()
+        self._refresh_angle_choices()
+        self.refresh_metric_choices()
+        self._refresh_angle_choices()
+        self._sync_state_settings_from_ui()
 
     def _get_fixed_range(self):
         if not self.range_fixed_var.get():
@@ -819,6 +875,8 @@ class DashboardDataPlotter(tk.Tk):
         if is_bar and self.value_mode_var.get() == "percent_mean":
             self.value_mode_var.set("absolute")
         self._set_plot_type_controls_state()
+        self._refresh_angle_choices()
+        self.refresh_metric_choices()
         self._update_outlier_show_state()
 
     def _can_autoplot(self):
@@ -965,7 +1023,7 @@ class DashboardDataPlotter(tk.Tk):
             return
         flagged = []
         for sid in sids:
-            df = self.state.loaded.get(sid)
+            df = self._get_plot_df_for_sid(sid, plot_type)
             if df is None or metric_col not in df.columns:
                 continue
             values = sanitize_numeric(df[metric_col], sentinels)
@@ -1011,7 +1069,7 @@ class DashboardDataPlotter(tk.Tk):
             return
         flagged = []
         for sid in sids:
-            df = self.state.loaded.get(sid)
+            df = self._get_plot_df_for_sid(sid, plot_type)
             if df is None or metric_col not in df.columns:
                 continue
             values = sanitize_numeric(df[metric_col], sentinels)
@@ -1136,9 +1194,10 @@ class DashboardDataPlotter(tk.Tk):
             baseline_ang = None
             baseline_vals = None
             if compare and baseline_id in self.state.loaded:
+                baseline_df = self._get_plot_df_for_sid(baseline_id, plot_type)
                 try:
                     baseline_ang, baseline_vals = prepare_angle_value_agg(
-                        self.state.loaded[baseline_id],
+                        baseline_df,
                         angle_col,
                         metric_col,
                         sentinels,
@@ -1154,7 +1213,7 @@ class DashboardDataPlotter(tk.Tk):
             for sid in sids:
                 if compare and sid == baseline_id:
                     continue
-                df = self.state.loaded.get(sid)
+                df = self._get_plot_df_for_sid(sid, plot_type)
                 if df is None or metric_col not in df.columns or angle_col not in df.columns:
                     continue
                 convert_br = angle_col in (
@@ -1288,6 +1347,7 @@ class DashboardDataPlotter(tk.Tk):
             "range_low": self.range_low_var.get(),
             "range_high": self.range_high_var.get(),
             "range_fixed": bool(self.range_fixed_var.get()),
+            "use_original_binned": bool(self.use_original_binned_var.get()),
             "show_flag": dict(self.state.show_flag),
         }
 
@@ -1373,6 +1433,11 @@ class DashboardDataPlotter(tk.Tk):
             snap.get("range_high", self.range_high_var.get()))
         self.range_fixed_var.set(
             bool(snap.get("range_fixed", self.range_fixed_var.get())))
+        self.use_original_binned_var.set(
+            bool(snap.get("use_original_binned", self.use_original_binned_var.get())))
+        self._update_original_binned_label()
+        self._refresh_angle_choices()
+        self.refresh_metric_choices()
 
         self._on_plot_type_change()
         self._set_compare_controls_state()
@@ -1598,6 +1663,8 @@ class DashboardDataPlotter(tk.Tk):
         for p in paths:
             try:
                 datasets, settings = load_project_from_file(p)
+                obj = load_json_file_obj(p)
+                binned_by_name = self._binned_from_json_obj(obj)
                 if not datasets:
                     raise ValueError("No valid datasets found in JSON file.")
                 base = os.path.splitext(os.path.basename(p))[0]
@@ -1608,6 +1675,9 @@ class DashboardDataPlotter(tk.Tk):
                         continue
                     self._register_dataset(
                         source_id=source_id, display=display, df=df)
+                    binned_df = binned_by_name.get(str(name))
+                    if binned_df is not None:
+                        self.state.binned[source_id] = binned_df
                     added += 1
                 if settings:
                     apply_project_settings(self.state, settings)
@@ -1621,6 +1691,7 @@ class DashboardDataPlotter(tk.Tk):
             self.status.set(
                 f"Loaded {added} dataset(s) from file(s). Total: {len(self.state.loaded)}")
             self.refresh_metric_choices()
+            self._refresh_angle_choices()
             self.refresh_baseline_choices()
             self._auto_default_metric()
 
@@ -1647,6 +1718,7 @@ class DashboardDataPlotter(tk.Tk):
         try:
             obj = json.loads(raw)
             datasets = self._datasets_from_json_obj(obj)
+            binned_by_name = self._binned_from_json_obj(obj)
             settings = extract_project_settings(obj)
         except Exception as e:
             messagebox.showerror("Paste load error",
@@ -1663,6 +1735,9 @@ class DashboardDataPlotter(tk.Tk):
                     continue
                 self._register_dataset(
                     source_id=source_id, display=display, df=df)
+                binned_df = binned_by_name.get(str(name))
+                if binned_df is not None:
+                    self.state.binned[source_id] = binned_df
                 added += 1
             except Exception as e:
                 messagebox.showwarning(
@@ -1676,6 +1751,7 @@ class DashboardDataPlotter(tk.Tk):
         self.status.set(
             f"Loaded {added} pasted dataset(s). Total: {len(self.state.loaded)}")
         self.refresh_metric_choices()
+        self._refresh_angle_choices()
         self.refresh_baseline_choices()
         self._auto_default_metric()
         if settings:
@@ -1717,7 +1793,8 @@ class DashboardDataPlotter(tk.Tk):
             self.metric_var.set("")
             return
         numeric_sets = []
-        for df in self.state.loaded.values():
+        plot_type = (self.plot_type_var.get() or "radar").strip().lower()
+        for df in self._iter_plot_source_dfs(plot_type):
             numeric_cols = {
                 c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])}
             numeric_sets.append(numeric_cols)
@@ -1727,6 +1804,56 @@ class DashboardDataPlotter(tk.Tk):
         if self.metric_var.get() and self.metric_var.get() not in common:
             self.metric_var.set("")
         self._auto_default_metric()
+
+    def _refresh_angle_choices(self):
+        if not hasattr(self, "angle_combo"):
+            return
+        plot_type = (self.plot_type_var.get() or "radar").strip().lower()
+        if plot_type == "timeseries":
+            return
+        if not self._use_original_binned_for_plot(plot_type):
+            default = ["leftPedalCrankAngle", "rightPedalCrankAngle"]
+            self.angle_combo["values"] = default
+            if self.angle_var.get() not in default:
+                self.angle_var.set(default[0] if default else "")
+            return
+
+        angle_sets = []
+        for df in self._iter_plot_source_dfs(plot_type):
+            angle_cols = {
+                c
+                for c in df.columns
+                if pd.api.types.is_numeric_dtype(df[c]) and "angle" in c.lower()
+            }
+            if angle_cols:
+                angle_sets.append(angle_cols)
+
+        common = set.intersection(*angle_sets) if angle_sets else set()
+        if not common:
+            common = {"leftPedalCrankAngle"}
+        values = sorted(common)
+        self.angle_combo["values"] = values
+        if self.angle_var.get() not in values:
+            self.angle_var.set(values[0] if values else "")
+
+    def _use_original_binned_for_plot(self, plot_type: str) -> bool:
+        if plot_type == "timeseries":
+            return False
+        return bool(self.use_original_binned_var.get())
+
+    def _get_plot_df_for_sid(self, source_id: str, plot_type: str):
+        df = None
+        if self._use_original_binned_for_plot(plot_type):
+            df = self.state.binned.get(source_id)
+            if df is not None and not df.empty:
+                return df
+        return self.state.loaded.get(source_id)
+
+    def _iter_plot_source_dfs(self, plot_type: str):
+        for sid in self.state.loaded.keys():
+            df = self._get_plot_df_for_sid(sid, plot_type)
+            if df is not None:
+                yield df
 
     def _auto_default_metric(self):
         vals = list(self.metric_combo["values"])
@@ -2127,7 +2254,8 @@ class DashboardDataPlotter(tk.Tk):
         return raw or "data"
 
     def _column_name_from_label(self, label: str, default: str) -> str:
-        raw = re.sub(r"[^a-z0-9]+", "_", str(label or "").strip().lower()).strip("_")
+        raw = re.sub(r"[^a-z0-9]+", "_",
+                     str(label or "").strip().lower()).strip("_")
         return raw or default
 
     def export_plot_data(self):

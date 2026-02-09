@@ -1,4 +1,4 @@
 APP_NAME = "Dashboard Data Plotter"
 # Increment BUILD_VERSION for each packaged build.
-BUILD_VERSION = "7"
+BUILD_VERSION = "8"
 APP_TITLE = f"{APP_NAME} (Build {BUILD_VERSION})"

@@ -88,4 +88,4 @@ def update_cleaning_settings(
     state.cleaning_settings.sentinels = list(sentinels)
     state.cleaning_settings.remove_outliers = bool(remove_outliers)
     state.cleaning_settings.outlier_threshold = outlier_threshold
-    state.cleaning_settings.outlier_method = str(outlier_method or "mad")
+    state.cleaning_settings.outlier_method = str(outlier_method or "impulse")

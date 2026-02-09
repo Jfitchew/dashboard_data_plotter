@@ -152,6 +152,8 @@ def normalize_outlier_method(method: str | None) -> str:
         return "phase_mad"
     if raw in ("hampel", "hampel filter"):
         return "hampel"
+    if raw in ("impulse", "impulse filter", "accel", "acceleration", "jerk"):
+        return "impulse"
     return "mad"
 
 
@@ -215,6 +217,21 @@ def filter_outliers_hampel(
     return x.mask(mask)
 
 
+def filter_outliers_impulse(series: pd.Series, threshold: float) -> pd.Series:
+    x = pd.to_numeric(series, errors="coerce")
+    accel = x.diff().diff()
+    accel_median = float(np.nanmedian(accel))
+    mad = float(np.nanmedian(np.abs(accel - accel_median)))
+    if not np.isfinite(mad) or mad == 0.0:
+        return x
+    scale = 1.4826 * mad
+    upper = accel_median + threshold * scale
+    lower = accel_median - threshold * scale
+    mask = (accel > upper) | (accel < lower)
+    mask = mask & ~mask.shift(1).fillna(False)
+    return x.mask(mask)
+
+
 def apply_outlier_filter(
     series: pd.Series,
     *,
@@ -230,6 +247,8 @@ def apply_outlier_filter(
         return filter_outliers_phase_mad(angle_series, series, threshold, bin_count=angle_bin_count)
     if method_key == "hampel":
         return filter_outliers_hampel(series, threshold)
+    if method_key == "impulse":
+        return filter_outliers_impulse(series, threshold)
     return filter_outliers_mad(series, threshold)
 
 

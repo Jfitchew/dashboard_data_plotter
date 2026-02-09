@@ -121,7 +121,7 @@ def apply_project_settings(state: ProjectState, settings: dict[str, Any]) -> Non
         if "outlier_threshold" in cleaning:
             state.cleaning_settings.outlier_threshold = cleaning.get("outlier_threshold")
         if "outlier_method" in cleaning:
-            state.cleaning_settings.outlier_method = str(cleaning.get("outlier_method") or "mad")
+            state.cleaning_settings.outlier_method = str(cleaning.get("outlier_method") or "impulse")
 
     if isinstance(analysis, dict):
         if "stats_mode" in analysis:

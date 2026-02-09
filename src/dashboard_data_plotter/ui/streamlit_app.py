@@ -340,7 +340,7 @@ def _render_plot_controls() -> None:
     _setdefault_state("range_high", "")
     _setdefault_state("range_fixed", False)
     _setdefault_state("remove_outliers", False)
-    _setdefault_state("outlier_method", "MAD")
+    _setdefault_state("outlier_method", "Impulse")
     _setdefault_state("outlier_threshold", "4.0")
     _setdefault_state("radar_background", True)
     _setdefault_state("compare", False)
@@ -416,7 +416,11 @@ def _render_plot_controls() -> None:
     with outlier_cols[0]:
         remove_outliers = st.checkbox("Active", key="remove_outliers")
     with outlier_cols[1]:
-        outlier_method = st.selectbox("Method", ["MAD", "Phase-MAD", "Hampel"], key="outlier_method")
+        outlier_method = st.selectbox(
+            "Method",
+            ["MAD", "Phase-MAD", "Hampel", "Impulse"],
+            key="outlier_method",
+        )
     with outlier_cols[2]:
         outlier_threshold = st.text_input("Threshold", key="outlier_threshold")
 
@@ -737,7 +741,7 @@ def main() -> None:
             st.caption("TODO: Wire these controls to core/cleaning.py (CleaningSettings).")
             st.text_input("Sentinel values", value=DEFAULT_SENTINELS, key="clean_sentinels")
             st.checkbox("Remove outliers", key="clean_outliers")
-            st.selectbox("Method", ["MAD", "Phase-MAD", "Hampel"], key="clean_outlier_method")
+            st.selectbox("Method", ["MAD", "Phase-MAD", "Hampel", "Impulse"], key="clean_outlier_method")
             st.text_input("Outlier threshold", value="4.0", key="clean_outlier_threshold")
 
         elif step == "Align":

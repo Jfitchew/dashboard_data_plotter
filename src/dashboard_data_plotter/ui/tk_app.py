@@ -151,7 +151,7 @@ class DashboardDataPlotter(tk.Tk):
         self.metric_var = tk.StringVar(value="")
         self.agg_var = tk.StringVar(value="median")
         self.remove_outliers_var = tk.BooleanVar(value=False)
-        self.outlier_method_var = tk.StringVar(value="MAD")
+        self.outlier_method_var = tk.StringVar(value="Impulse")
         self.outlier_thresh_var = tk.StringVar(value="4.0")
         self.show_outliers_var = tk.BooleanVar(value=False)
         self.close_loop_var = tk.BooleanVar(value=True)
@@ -433,7 +433,7 @@ class DashboardDataPlotter(tk.Tk):
         self.outlier_method_combo = ttk.Combobox(
             outlier_row,
             textvariable=self.outlier_method_var,
-            values=["MAD", "Phase-MAD", "Hampel"],
+            values=["MAD", "Phase-MAD", "Hampel", "Impulse"],
             state="readonly",
             width=12,
         )
@@ -692,7 +692,8 @@ class DashboardDataPlotter(tk.Tk):
              "Choose outlier method:\n"
              "MAD = global robust z-score.\n"
              "Phase-MAD = robust z-score per crank-angle bin.\n"
-             "Hampel = rolling median filter."),
+             "Hampel = rolling median filter.\n"
+             "Impulse = acceleration-based spike detector."),
             (self.outlier_entry,
              "Outlier threshold (default 4.0).\n"
              "Lower = more aggressive removal."),
@@ -926,6 +927,8 @@ class DashboardDataPlotter(tk.Tk):
             return "Phase-MAD"
         if key == "hampel":
             return "Hampel"
+        if key == "impulse":
+            return "Impulse"
         return "MAD"
 
     def _get_plot_sids(self, plot_type, compare, baseline_id):

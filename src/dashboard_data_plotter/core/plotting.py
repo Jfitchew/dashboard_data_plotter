@@ -9,7 +9,8 @@ from dashboard_data_plotter.core.datasets import ordered_source_ids
 from dashboard_data_plotter.core.state import ProjectState
 from dashboard_data_plotter.data.loaders import (
     aggregate_metric,
-    filter_outliers_mad,
+    apply_outlier_filter,
+    normalize_outlier_method,
     prepare_angle_value_agg,
     sanitize_numeric,
     wrap_angle_deg,
@@ -97,16 +98,22 @@ def _series_pedal_stroke(
     metric_col: str,
     sentinels: list[float],
     outlier_threshold: Optional[float],
+    outlier_method: Optional[str],
 ) -> tuple[np.ndarray, np.ndarray]:
     if "leftPedalCrankAngle" not in df.columns:
         raise KeyError("Angle column 'leftPedalCrankAngle' not found.")
-    ang = wrap_angle_deg(
+    ang_series = wrap_angle_deg(
         sanitize_numeric(df["leftPedalCrankAngle"], sentinels),
         convert_br_to_standard=True,
-    ).to_numpy(dtype=float)
+    )
+    ang = ang_series.to_numpy(dtype=float)
     val = sanitize_numeric(df[metric_col], sentinels)
-    if outlier_threshold is not None:
-        val = filter_outliers_mad(val, outlier_threshold)
+    val = apply_outlier_filter(
+        val,
+        threshold=outlier_threshold,
+        method=outlier_method,
+        angle_series=ang_series if normalize_outlier_method(outlier_method) == "phase_mad" else None,
+    )
     val = val.to_numpy(dtype=float)
     mask = np.isfinite(ang) & np.isfinite(val)
     ang = ang[mask]
@@ -141,16 +148,22 @@ def _series_roll_360(
     metric_col: str,
     sentinels: list[float],
     outlier_threshold: Optional[float],
+    outlier_method: Optional[str],
 ) -> tuple[np.ndarray, np.ndarray]:
     if "leftPedalCrankAngle" not in df.columns:
         raise KeyError("Angle column 'leftPedalCrankAngle' not found.")
-    ang = wrap_angle_deg(
+    ang_series = wrap_angle_deg(
         sanitize_numeric(df["leftPedalCrankAngle"], sentinels),
         convert_br_to_standard=True,
-    ).to_numpy(dtype=float)
+    )
+    ang = ang_series.to_numpy(dtype=float)
     val = sanitize_numeric(df[metric_col], sentinels)
-    if outlier_threshold is not None:
-        val = filter_outliers_mad(val, outlier_threshold)
+    val = apply_outlier_filter(
+        val,
+        threshold=outlier_threshold,
+        method=outlier_method,
+        angle_series=ang_series if normalize_outlier_method(outlier_method) == "phase_mad" else None,
+    )
     val = val.to_numpy(dtype=float)
     mask = np.isfinite(ang) & np.isfinite(val)
     ang = ang[mask]
@@ -206,6 +219,15 @@ def _resolve_outlier_threshold(
     return None
 
 
+def _resolve_outlier_method(
+    state: ProjectState,
+    outlier_method: Optional[str] = None,
+) -> str:
+    if outlier_method is not None:
+        return normalize_outlier_method(outlier_method)
+    return normalize_outlier_method(state.cleaning_settings.outlier_method)
+
+
 def _resolve_plot_inputs(
     state: ProjectState,
     angle_col: Optional[str] = None,
@@ -236,6 +258,7 @@ def prepare_radar_plot(
     baseline_id: Optional[str] = None,
     sentinels: Optional[Iterable[float]] = None,
     outlier_threshold: Optional[float] = None,
+    outlier_method: Optional[str] = None,
     close_loop: Optional[bool] = None,
 ) -> RadarPlotData:
     angle_col, metric_col, agg_mode, value_mode, compare, baseline_id = _resolve_plot_inputs(
@@ -247,6 +270,7 @@ def prepare_radar_plot(
         raise ValueError("Metric column is required for radar plot.")
     sentinels = _resolve_sentinels(state, sentinels)
     outlier_threshold = _resolve_outlier_threshold(state, outlier_threshold)
+    outlier_method = _resolve_outlier_method(state, outlier_method)
     close_loop = bool(close_loop) if close_loop is not None else bool(state.plot_settings.close_loop)
 
     data = RadarPlotData(
@@ -269,6 +293,7 @@ def prepare_radar_plot(
             sentinels,
             agg=agg_mode,
             outlier_threshold=outlier_threshold,
+            outlier_method=outlier_method,
         )
         b_val2 = _apply_value_mode(b_val, value_mode)
 
@@ -288,6 +313,7 @@ def prepare_radar_plot(
                     sentinels,
                     agg=agg_mode,
                     outlier_threshold=outlier_threshold,
+                    outlier_method=outlier_method,
                 )
                 val2 = _apply_value_mode(val, value_mode)
                 base_at = circular_interp_baseline(b_ang, b_val2, ang)
@@ -339,6 +365,7 @@ def prepare_radar_plot(
                 sentinels,
                 agg=agg_mode,
                 outlier_threshold=outlier_threshold,
+                outlier_method=outlier_method,
             )
             val2 = _apply_value_mode(val, value_mode)
             if close_loop and len(ang) > 2:
@@ -362,6 +389,7 @@ def prepare_cartesian_plot(
     baseline_id: Optional[str] = None,
     sentinels: Optional[Iterable[float]] = None,
     outlier_threshold: Optional[float] = None,
+    outlier_method: Optional[str] = None,
     close_loop: Optional[bool] = None,
 ) -> CartesianPlotData:
     angle_col, metric_col, agg_mode, value_mode, compare, baseline_id = _resolve_plot_inputs(
@@ -373,6 +401,7 @@ def prepare_cartesian_plot(
         raise ValueError("Metric column is required for cartesian plot.")
     sentinels = _resolve_sentinels(state, sentinels)
     outlier_threshold = _resolve_outlier_threshold(state, outlier_threshold)
+    outlier_method = _resolve_outlier_method(state, outlier_method)
     close_loop = bool(close_loop) if close_loop is not None else bool(state.plot_settings.close_loop)
 
     data = CartesianPlotData(
@@ -395,6 +424,7 @@ def prepare_cartesian_plot(
             sentinels,
             agg=agg_mode,
             outlier_threshold=outlier_threshold,
+            outlier_method=outlier_method,
         )
         b_val2 = _apply_value_mode(b_val, value_mode)
 
@@ -412,6 +442,7 @@ def prepare_cartesian_plot(
                     sentinels,
                     agg=agg_mode,
                     outlier_threshold=outlier_threshold,
+                    outlier_method=outlier_method,
                 )
                 val2 = _apply_value_mode(val, value_mode)
                 base_at = circular_interp_baseline(b_ang, b_val2, ang)
@@ -444,6 +475,7 @@ def prepare_cartesian_plot(
                 sentinels,
                 agg=agg_mode,
                 outlier_threshold=outlier_threshold,
+                outlier_method=outlier_method,
             )
             val2 = _apply_value_mode(val, value_mode)
             order_idx = np.argsort(ang)
@@ -469,6 +501,7 @@ def prepare_bar_plot(
     baseline_id: Optional[str] = None,
     sentinels: Optional[Iterable[float]] = None,
     outlier_threshold: Optional[float] = None,
+    outlier_method: Optional[str] = None,
 ) -> BarPlotData:
     _, metric_col, agg_mode, value_mode, compare, baseline_id = _resolve_plot_inputs(
         state, None, metric_col, agg_mode, value_mode, compare, baseline_id
@@ -479,6 +512,7 @@ def prepare_bar_plot(
         raise ValueError("Metric column is required for bar plot.")
     sentinels = _resolve_sentinels(state, sentinels)
     outlier_threshold = _resolve_outlier_threshold(state, outlier_threshold)
+    outlier_method = _resolve_outlier_method(state, outlier_method)
 
     data = BarPlotData(
         mode_label="absolute",
@@ -499,6 +533,7 @@ def prepare_bar_plot(
             sentinels,
             agg=agg_mode,
             outlier_threshold=outlier_threshold,
+            outlier_method=outlier_method,
         )
 
     ordered_ids = []
@@ -518,6 +553,7 @@ def prepare_bar_plot(
                 sentinels,
                 agg=agg_mode,
                 outlier_threshold=outlier_threshold,
+                outlier_method=outlier_method,
             )
             if compare and baseline_value is not None:
                 if sid == baseline_id:
@@ -542,6 +578,7 @@ def prepare_timeseries_plot(
     baseline_id: Optional[str] = None,
     sentinels: Optional[Iterable[float]] = None,
     outlier_threshold: Optional[float] = None,
+    outlier_method: Optional[str] = None,
 ) -> TimeSeriesPlotData:
     _, metric_col, agg_mode, value_mode, compare, baseline_id = _resolve_plot_inputs(
         state, None, metric_col, agg_mode, value_mode, compare, baseline_id
@@ -550,6 +587,7 @@ def prepare_timeseries_plot(
         raise ValueError("Metric column is required for time series plot.")
     sentinels = _resolve_sentinels(state, sentinels)
     outlier_threshold = _resolve_outlier_threshold(state, outlier_threshold)
+    outlier_method = _resolve_outlier_method(state, outlier_method)
 
     data = TimeSeriesPlotData(
         mode_label="absolute" if value_mode == "absolute" else "% of mean",
@@ -574,18 +612,17 @@ def prepare_timeseries_plot(
         data.baseline_label = baseline_label
         if agg_mode == "pedal_stroke":
             _, b_vals = _series_pedal_stroke(
-                state.loaded[baseline_id], metric_col, sentinels, outlier_threshold
+                state.loaded[baseline_id], metric_col, sentinels, outlier_threshold, outlier_method
             )
             baseline_series = _apply_value_mode(b_vals, value_mode)
         elif agg_mode == "roll_360deg":
             _, b_vals = _series_roll_360(
-                state.loaded[baseline_id], metric_col, sentinels, outlier_threshold
+                state.loaded[baseline_id], metric_col, sentinels, outlier_threshold, outlier_method
             )
             baseline_series = _apply_value_mode(b_vals, value_mode)
         else:
             vals = sanitize_numeric(state.loaded[baseline_id][metric_col], sentinels)
-            if outlier_threshold is not None:
-                vals = filter_outliers_mad(vals, outlier_threshold)
+            vals = apply_outlier_filter(vals, threshold=outlier_threshold, method=outlier_method)
             baseline_series = _apply_value_mode(vals.to_numpy(dtype=float), value_mode)
 
     for sid in order:
@@ -597,18 +634,17 @@ def prepare_timeseries_plot(
         try:
             if agg_mode == "pedal_stroke":
                 t, vals = _series_pedal_stroke(
-                    state.loaded[sid], metric_col, sentinels, outlier_threshold
+                    state.loaded[sid], metric_col, sentinels, outlier_threshold, outlier_method
                 )
                 val2 = _apply_value_mode(vals, value_mode)
             elif agg_mode == "roll_360deg":
                 t, vals = _series_roll_360(
-                    state.loaded[sid], metric_col, sentinels, outlier_threshold
+                    state.loaded[sid], metric_col, sentinels, outlier_threshold, outlier_method
                 )
                 val2 = _apply_value_mode(vals, value_mode)
             else:
                 vals = sanitize_numeric(state.loaded[sid][metric_col], sentinels)
-                if outlier_threshold is not None:
-                    vals = filter_outliers_mad(vals, outlier_threshold)
+                vals = apply_outlier_filter(vals, threshold=outlier_threshold, method=outlier_method)
                 val2 = _apply_value_mode(vals.to_numpy(dtype=float), value_mode)
                 t = np.arange(len(val2), dtype=float) / 100.0
 

@@ -146,6 +146,15 @@ def _trimmed_mean(values: pd.Series, trim_fraction: float = 0.10) -> float:
     return float(np.nanmean(arr[trim:arr.size - trim]))
 
 
+def normalize_outlier_method(method: str | None) -> str:
+    raw = str(method or "").strip().lower()
+    if raw in ("phase-mad", "phase_mad", "phase mad", "phase"):
+        return "phase_mad"
+    if raw in ("hampel", "hampel filter"):
+        return "hampel"
+    return "mad"
+
+
 def filter_outliers_mad(series: pd.Series, threshold: float) -> pd.Series:
     x = pd.to_numeric(series, errors="coerce")
     median = float(np.nanmedian(x))
@@ -156,15 +165,84 @@ def filter_outliers_mad(series: pd.Series, threshold: float) -> pd.Series:
     return x.mask(np.abs(z) > threshold)
 
 
+def filter_outliers_phase_mad(
+    angle_series: pd.Series,
+    value_series: pd.Series,
+    threshold: float,
+    bin_count: int = 52,
+) -> pd.Series:
+    ang = pd.to_numeric(angle_series, errors="coerce")
+    val = pd.to_numeric(value_series, errors="coerce")
+    if bin_count <= 0:
+        return val
+    bin_w = 360.0 / float(bin_count)
+    angle_bin = (np.round(ang / bin_w) * bin_w) % 360.0
+    df = pd.DataFrame({"angle_bin": angle_bin, "value": val})
+
+    def _mask_group(group: pd.DataFrame) -> pd.Series:
+        x = group["value"]
+        median = float(np.nanmedian(x))
+        mad = float(np.nanmedian(np.abs(x - median)))
+        if not np.isfinite(mad) or mad == 0.0:
+            return pd.Series(False, index=group.index)
+        z = 0.6745 * (x - median) / mad
+        return np.abs(z) > threshold
+
+    mask = df.groupby("angle_bin", dropna=False,
+                      group_keys=False).apply(_mask_group)
+    mask = mask.reindex(df.index, fill_value=False)
+    return val.mask(mask)
+
+
+def filter_outliers_hampel(
+    series: pd.Series,
+    threshold: float,
+    window: int = 21,
+) -> pd.Series:
+    x = pd.to_numeric(series, errors="coerce")
+    if window < 3:
+        return x
+    if window % 2 == 0:
+        window += 1
+    rolling_median = x.rolling(
+        window=window, center=True, min_periods=1).median()
+    diff = (x - rolling_median).abs()
+    rolling_mad = diff.rolling(
+        window=window, center=True, min_periods=1).median()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = 0.6745 * diff / rolling_mad
+    mask = (rolling_mad > 0) & np.isfinite(z) & (z > threshold)
+    return x.mask(mask)
+
+
+def apply_outlier_filter(
+    series: pd.Series,
+    *,
+    threshold: float | None,
+    method: str | None = None,
+    angle_series: pd.Series | None = None,
+    angle_bin_count: int = 52,
+) -> pd.Series:
+    if threshold is None:
+        return pd.to_numeric(series, errors="coerce")
+    method_key = normalize_outlier_method(method)
+    if method_key == "phase_mad" and angle_series is not None:
+        return filter_outliers_phase_mad(angle_series, series, threshold, bin_count=angle_bin_count)
+    if method_key == "hampel":
+        return filter_outliers_hampel(series, threshold)
+    return filter_outliers_mad(series, threshold)
+
+
 def aggregate_metric(
     series: pd.Series,
     sentinels: List[float],
     agg: str = "mean",
     outlier_threshold: float | None = None,
+    outlier_method: str | None = None,
 ) -> float:
     values = sanitize_numeric(series, sentinels)
-    if outlier_threshold is not None:
-        values = filter_outliers_mad(values, outlier_threshold)
+    values = apply_outlier_filter(
+        values, threshold=outlier_threshold, method=outlier_method)
     agg_key = str(agg).lower()
     if agg_key == "median":
         return float(np.nanmedian(values.to_numpy(dtype=float)))
@@ -180,6 +258,7 @@ def prepare_angle_value_agg(
     sentinels: List[float],
     agg: str = "mean",
     outlier_threshold: float | None = None,
+    outlier_method: str | None = None,
 ):
     """
     Returns:
@@ -197,21 +276,28 @@ def prepare_angle_value_agg(
         convert_br_to_standard=convert_br,
     )
     val = sanitize_numeric(df[metric_col], sentinels)
-    if outlier_threshold is not None:
-        val = filter_outliers_mad(val, outlier_threshold)
+    val = apply_outlier_filter(
+        val,
+        threshold=outlier_threshold,
+        method=outlier_method,
+        angle_series=ang if normalize_outlier_method(
+            outlier_method) == "phase_mad" else None,
+        angle_bin_count=52,
+    )
 
     plot_df = pd.DataFrame({"angle_deg": ang, "value": val}).dropna()
 
     # enforce 52-bin quantization to avoid float noise / extra points
     BIN_COUNT = 52
     BIN_W = 360.0 / BIN_COUNT
-    plot_df["angle_bin"] = (np.round(plot_df["angle_deg"] / BIN_W) * BIN_W) % 360.0
+    plot_df["angle_bin"] = (
+        np.round(plot_df["angle_deg"] / BIN_W) * BIN_W) % 360.0
 
     agg_key = str(agg).lower()
     if agg_key == "median":
         agg_func = "median"
     elif agg_key == "trimmed_mean_10":
-        agg_func = lambda s: _trimmed_mean(s, 0.10)
+        def agg_func(s): return _trimmed_mean(s, 0.10)
     else:
         agg_func = "mean"
     plot_df = (

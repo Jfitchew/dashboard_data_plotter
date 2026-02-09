@@ -17,7 +17,7 @@ from dashboard_data_plotter.data.loaders import (
 )
 
 PROJECT_SETTINGS_KEY = "__project_settings__"
-PROJECT_SETTINGS_VERSION = 2
+PROJECT_SETTINGS_VERSION = 3
 
 
 def build_project_settings(state: ProjectState) -> dict[str, Any]:
@@ -55,6 +55,7 @@ def build_project_settings(state: ProjectState) -> dict[str, Any]:
             "sentinels": list(cleaning.sentinels),
             "remove_outliers": cleaning.remove_outliers,
             "outlier_threshold": cleaning.outlier_threshold,
+            "outlier_method": cleaning.outlier_method,
         },
         "analysis": {
             "stats_mode": state.analysis_settings.stats_mode,
@@ -119,6 +120,8 @@ def apply_project_settings(state: ProjectState, settings: dict[str, Any]) -> Non
             state.cleaning_settings.remove_outliers = bool(cleaning.get("remove_outliers"))
         if "outlier_threshold" in cleaning:
             state.cleaning_settings.outlier_threshold = cleaning.get("outlier_threshold")
+        if "outlier_method" in cleaning:
+            state.cleaning_settings.outlier_method = str(cleaning.get("outlier_method") or "mad")
 
     if isinstance(analysis, dict):
         if "stats_mode" in analysis:

@@ -191,7 +191,7 @@ This will:
 
 The Streamlit UI mirrors most plotting controls from the Tkinter app, including:
 - Plot type selection (Radar / Cartesian / Bar / Time series)
-- Close loop, outlier removal (MAD), fixed range
+- Close loop, outlier removal (MAD / Phase-MAD / Hampel), fixed range
 - Baseline comparison
 - Optional background images/bands
 - Plot history (Prev / Next / Delete)

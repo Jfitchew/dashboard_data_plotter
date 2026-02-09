@@ -131,7 +131,7 @@ def _series_pedal_stroke(
 
     if not stroke_means:
         raise ValueError("No valid pedal strokes after filtering.")
-    x = np.arange(len(stroke_means), dtype=float)
+    x = np.arange(1, len(stroke_means) + 1, dtype=float)
     y = np.asarray(stroke_means, dtype=float)
     return x, y
 

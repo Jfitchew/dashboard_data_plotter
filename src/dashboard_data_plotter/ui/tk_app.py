@@ -210,6 +210,33 @@ class DashboardDataPlotter(tk.Tk):
         return {sid: colors[idx % len(colors)] for idx, sid in enumerate(ids)}
 
     # ---------------- UI ----------------
+    def _create_accordion_section(self, parent, title, row, expanded=False):
+        section = ttk.Frame(parent)
+        section.grid(row=row, column=0, sticky="ew", pady=(0, 6))
+        section.columnconfigure(0, weight=1)
+
+        header = ttk.Button(section, text="", style="Accordion.TButton")
+        header.grid(row=0, column=0, sticky="ew")
+
+        body = ttk.Frame(section)
+        body.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        body.columnconfigure(0, weight=1)
+
+        def set_open(is_open):
+            symbol = "\u25BC" if is_open else "\u25B6"
+            header.configure(text=f"{symbol} {title}")
+            if is_open:
+                body.grid()
+            else:
+                body.grid_remove()
+
+        def toggle():
+            set_open(not body.winfo_ismapped())
+
+        header.configure(command=toggle)
+        set_open(expanded)
+        return body
+
     def _build_ui(self):
         self.columnconfigure(0, weight=0)
         self.columnconfigure(1, weight=1)
@@ -217,11 +244,22 @@ class DashboardDataPlotter(tk.Tk):
 
         left = ttk.Frame(self, padding=10)
         left.grid(row=0, column=0, sticky="ns")
+        left.columnconfigure(0, weight=1)
 
-        ttk.Label(left, text="Data sources", font=(
+        style = ttk.Style()
+        style.configure("Accordion.TButton", anchor="w")
+
+        load_section = self._create_accordion_section(left, "Load", 0, expanded=True)
+        clean_section = self._create_accordion_section(left, "Clean", 1)
+        align_section = self._create_accordion_section(left, "Align", 2)
+        plot_section = self._create_accordion_section(left, "Plot", 3)
+        analysis_section = self._create_accordion_section(left, "Analysis", 4)
+        report_section = self._create_accordion_section(left, "Report", 5)
+
+        ttk.Label(load_section, text="Data sources", font=(
             "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
 
-        btns = ttk.Frame(left)
+        btns = ttk.Frame(load_section)
         btns.grid(row=1, column=0, sticky="ew", pady=(6, 6))
         self.btn_add_files = ttk.Button(
             btns, text="Add JSON file(s)...", command=self.add_files)
@@ -246,7 +284,7 @@ class DashboardDataPlotter(tk.Tk):
         self.btn_move_down.grid(row=0, column=6, padx=(6, 0))
 
         # Treeview: show checkbox + dataset name
-        tv_frame = ttk.Frame(left)
+        tv_frame = ttk.Frame(load_section)
         tv_frame.grid(row=2, column=0, sticky="ew")
         tv_frame.columnconfigure(0, weight=1)
 
@@ -278,10 +316,10 @@ class DashboardDataPlotter(tk.Tk):
             "<Double-1>", self._on_tree_double_click, add=True)
 
         # --- Paste JSON sources
-        ttk.Label(left, text="Paste JSON data sources", font=(
+        ttk.Label(load_section, text="Paste JSON data sources", font=(
             "Segoe UI", 10, "bold")).grid(row=3, column=0, sticky="w", pady=(10, 0))
 
-        paste_frame = ttk.Frame(left)
+        paste_frame = ttk.Frame(load_section)
         paste_frame.grid(row=4, column=0, sticky="ew", pady=(6, 6))
 
         self.paste_text = tk.Text(paste_frame, height=6, width=52, wrap="none")
@@ -307,7 +345,7 @@ class DashboardDataPlotter(tk.Tk):
 
         self.paste_text.bind("<Button-3>", self._show_paste_menu, add=True)
 
-        paste_btns = ttk.Frame(left)
+        paste_btns = ttk.Frame(load_section)
         paste_btns.grid(row=5, column=0, sticky="ew", pady=(2, 6))
         self.btn_load_paste = ttk.Button(
             paste_btns, text="Load pasted JSON", command=self.load_from_paste)
@@ -319,13 +357,42 @@ class DashboardDataPlotter(tk.Tk):
             paste_btns, text="Clear pasted", command=self.clear_paste)
         self.btn_clear_paste.grid(row=0, column=2, padx=(6, 0))
 
-        ttk.Separator(left).grid(row=6, column=0, sticky="ew", pady=10)
+        ttk.Label(clean_section, text="Cleaning settings", font=(
+            "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
 
-        ttk.Label(left, text="Plot settings", font=(
-            "Segoe UI", 11, "bold")).grid(row=7, column=0, sticky="w")
+        clean_frame = ttk.Frame(clean_section)
+        clean_frame.grid(row=1, column=0, sticky="ew", pady=(6, 2))
+        clean_frame.columnconfigure(1, weight=1)
+        ttk.Label(clean_frame, text="Sentinel values:").grid(
+            row=0, column=0, sticky="w")
+        self.sentinels_entry = ttk.Entry(
+            clean_frame, textvariable=self.sentinels_var, width=28)
+        self.sentinels_entry.grid(row=0, column=1, sticky="ew", padx=(8, 0))
 
-        angle_frame = ttk.Frame(left)
-        angle_frame.grid(row=8, column=0, sticky="ew", pady=(6, 2))
+        self.outlier_chk = ttk.Checkbutton(
+            clean_frame, text="Remove outliers (MAD)", variable=self.remove_outliers_var,
+            command=self._on_outlier_toggle)
+        self.outlier_chk.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(clean_frame, text="Threshold:").grid(
+            row=1, column=1, sticky="e", padx=(10, 0), pady=(6, 0))
+        self.outlier_entry = ttk.Entry(
+            clean_frame, textvariable=self.outlier_thresh_var, width=8)
+        self.outlier_entry.grid(row=1, column=2, sticky="w", padx=(6, 0), pady=(6, 0))
+
+        ttk.Label(align_section, text="Alignment", font=(
+            "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            align_section,
+            text="Alignment workflows will be added here in a future update.",
+            wraplength=360,
+            foreground="#555",
+        ).grid(row=1, column=0, sticky="w", pady=(6, 0))
+
+        ttk.Label(plot_section, text="Plot settings", font=(
+            "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+
+        angle_frame = ttk.Frame(plot_section)
+        angle_frame.grid(row=1, column=0, sticky="ew", pady=(6, 2))
 
         # Plot type (radar/cartesian/bar)
         ttk.Label(angle_frame, text="Plot type:").grid(
@@ -376,8 +443,8 @@ class DashboardDataPlotter(tk.Tk):
             angle_frame, text="Close loop", variable=self.close_loop_var)
         self.close_loop_chk.grid(row=1, column=1, sticky="e", padx=(0, 70))
 
-        metric_frame = ttk.Frame(left)
-        metric_frame.grid(row=9, column=0, sticky="ew", pady=(6, 2))
+        metric_frame = ttk.Frame(plot_section)
+        metric_frame.grid(row=2, column=0, sticky="ew", pady=(6, 2))
         ttk.Label(metric_frame, text="Metric column:").grid(
             row=0, column=0, sticky="w")
         self.metric_combo = ttk.Combobox(
@@ -390,18 +457,8 @@ class DashboardDataPlotter(tk.Tk):
             values=["mean", "median", "10% trimmed mean"], state="readonly", width=16)
         self.agg_combo.grid(row=0, column=3, sticky="w", padx=(6, 0))
 
-        self.outlier_chk = ttk.Checkbutton(
-            metric_frame, text="Remove outliers (MAD)", variable=self.remove_outliers_var,
-            command=self._on_outlier_toggle)
-        self.outlier_chk.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(4, 0))
-        ttk.Label(metric_frame, text="Threshold:").grid(
-            row=1, column=2, sticky="w", padx=(10, 0), pady=(4, 0))
-        self.outlier_entry = ttk.Entry(
-            metric_frame, textvariable=self.outlier_thresh_var, width=8)
-        self.outlier_entry.grid(row=1, column=3, sticky="w", padx=(6, 0), pady=(4, 0))
-
-        range_frame = ttk.Frame(left)
-        range_frame.grid(row=10, column=0, sticky="ew", pady=(6, 2))
+        range_frame = ttk.Frame(plot_section)
+        range_frame.grid(row=3, column=0, sticky="ew", pady=(6, 2))
         ttk.Label(range_frame, text="Range (min, max):").grid(
             row=0, column=0, sticky="w")
         self.range_low_entry = ttk.Entry(
@@ -414,14 +471,13 @@ class DashboardDataPlotter(tk.Tk):
             range_frame, text="Fixed", variable=self.range_fixed_var)
         self.range_fixed_chk.grid(row=0, column=3, sticky="w", padx=(8, 0))
 
-        ttk.Separator(left).grid(row=12, column=0, sticky="ew", pady=10)
+        ttk.Separator(plot_section).grid(row=4, column=0, sticky="ew", pady=10)
 
-        # Value mode
-        ttk.Label(left, text="Value mode", font=("Segoe UI", 11, "bold")).grid(
-            row=13, column=0, sticky="w")
+        ttk.Label(plot_section, text="Value mode", font=("Segoe UI", 11, "bold")).grid(
+            row=5, column=0, sticky="w")
 
-        vm_frame = ttk.Frame(left)
-        vm_frame.grid(row=14, column=0, sticky="ew", pady=(6, 2))
+        vm_frame = ttk.Frame(plot_section)
+        vm_frame.grid(row=6, column=0, sticky="ew", pady=(6, 2))
         self.rb_absolute = ttk.Radiobutton(
             vm_frame, text="Absolute metric values", variable=self.value_mode_var,
             value="absolute")
@@ -430,27 +486,26 @@ class DashboardDataPlotter(tk.Tk):
             vm_frame, text="% of dataset mean", variable=self.value_mode_var, value="percent_mean")
         self.rb_percent_mean.grid(row=0, column=1, sticky="w", padx=(20, 0))
 
-        ttk.Separator(left).grid(row=15, column=0, sticky="ew", pady=10)
+        ttk.Separator(plot_section).grid(row=7, column=0, sticky="ew", pady=10)
 
-        # Comparison mode
-        ttk.Label(left, text="Comparison mode", font=(
-            "Segoe UI", 11, "bold")).grid(row=16, column=0, sticky="w")
+        ttk.Label(plot_section, text="Comparison mode", font=(
+            "Segoe UI", 11, "bold")).grid(row=8, column=0, sticky="w")
 
         self.chk_compare = ttk.Checkbutton(
-            left, text="Plot as difference vs Baseline:", variable=self.compare_var,
+            plot_section, text="Plot as difference vs Baseline:", variable=self.compare_var,
             command=self._on_compare_toggle)
-        self.chk_compare.grid(row=17, column=0, sticky="w", pady=(6, 2))
+        self.chk_compare.grid(row=9, column=0, sticky="w", pady=(6, 2))
 
-        base_frame = ttk.Frame(left)
-        base_frame.grid(row=17, column=0, sticky="e", padx=(0, 65))
+        base_frame = ttk.Frame(plot_section)
+        base_frame.grid(row=9, column=0, sticky="e", padx=(0, 65))
         self.baseline_combo = ttk.Combobox(base_frame, textvariable=self.baseline_display_var,
                                            values=[], state="readonly", width=30)
         self.baseline_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
-        ttk.Separator(left).grid(row=18, column=0, sticky="ew", pady=10)
+        ttk.Separator(plot_section).grid(row=10, column=0, sticky="ew", pady=10)
 
-        plot_btns = ttk.Frame(left)
-        plot_btns.grid(row=19, column=0, sticky="ew", pady=(10, 0))
+        plot_btns = ttk.Frame(plot_section)
+        plot_btns.grid(row=11, column=0, sticky="ew", pady=(10, 0))
         plot_btns.columnconfigure(0, weight=1)
         self.plot_btn = ttk.Button(
             plot_btns, text="Plot / Refresh", command=self.plot)
@@ -466,13 +521,30 @@ class DashboardDataPlotter(tk.Tk):
             plot_btns, text="Next", command=self._plot_next, state="disabled", width=5)
         self.next_btn.grid(row=0, column=3, padx=(2, 0))
 
-        style = ttk.Style()
         style.configure("Red.TButton", background="red", foreground="black")
 
         self.status = tk.StringVar(
             value="Load one or more JSON files, or paste a dataset object, to begin.")
-        ttk.Label(left, textvariable=self.status, wraplength=380, foreground="#333").grid(
-            row=20, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(plot_section, textvariable=self.status, wraplength=380, foreground="#333").grid(
+            row=12, column=0, sticky="w", pady=(10, 0))
+
+        ttk.Label(analysis_section, text="Analysis", font=(
+            "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            analysis_section,
+            text="Analysis workflows will be added here in a future update.",
+            wraplength=360,
+            foreground="#555",
+        ).grid(row=1, column=0, sticky="w", pady=(6, 0))
+
+        ttk.Label(report_section, text="Report", font=(
+            "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            report_section,
+            text="Report workflows will be added here in a future update.",
+            wraplength=360,
+            foreground="#555",
+        ).grid(row=1, column=0, sticky="w", pady=(6, 0))
 
         self._on_plot_type_change()
         self._set_compare_controls_state()

@@ -304,18 +304,20 @@ class DashboardDataPlotter(tk.Tk):
         # --- Paste JSON sources
         paste_header = ttk.Frame(left)
         paste_header.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        ttk.Label(paste_header, text="Paste JSON data sources", font=(
+            "Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=(0, 0))
+
         self.outlier_warnings_chk = ttk.Checkbutton(
             paste_header,
             text="Outlier warnings?",
             variable=self.outlier_warnings_var,
             command=self._on_outlier_warnings_toggle,
         )
-        self.outlier_warnings_chk.grid(row=0, column=0, sticky="w")
-        ttk.Label(paste_header, text="Paste JSON data sources", font=(
-            "Segoe UI", 10, "bold")).grid(row=0, column=1, sticky="w", padx=(14, 0))
+        self.outlier_warnings_chk.grid(
+            row=0, column=1, sticky="e", padx=(180, 0), pady=(0, 10))
 
         paste_frame = ttk.Frame(left)
-        paste_frame.grid(row=4, column=0, sticky="ew", pady=(6, 6))
+        paste_frame.grid(row=4, column=0, sticky="ew")
 
         self.paste_text = tk.Text(paste_frame, height=6, width=52, wrap="none")
         self.paste_text.grid(row=0, column=0, sticky="ew")

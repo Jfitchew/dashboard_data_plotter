@@ -79,7 +79,10 @@ Agents must follow the rules below.
 - Make minimal, localised edits
 - Preserve function signatures
 - Add helpers instead of duplicating logic
+- Update CHANGELOG.md with a brief summary of code changes, and remove entries if changes are rolled back
 - Update README if behaviour changes
+- MAJOR version is manual (see `src/dashboard_data_plotter/version.py`); do not auto-bump it
+- Packaged builds should be tagged in git as `MAJOR.BUILD` for changelog cutoffs
 - Call out key manual checks after changes (2–4 items max) tied to the modified behavior
 - Run through the testing checklist mentally
 

@@ -109,6 +109,7 @@ When comparison mode is enabled:
   - Paste JSON pane
   - Plot settings
   - Comparison controls
+  - Change log button (opens `CHANGELOG.md` in-app; auto-populated from git history with room for manual entries)
 - **Right panel**
   - Matplotlib figure canvas
   - Toolbar (zoom, pan, save image)
@@ -220,6 +221,12 @@ Produces:
 ```
 dist\DashboardDataPlotter.exe
 ```
+
+### Versioning and changelog
+- `MAJOR_VERSION` lives in `src/dashboard_data_plotter/version.py` and is **manual only**
+- `BUILD_VERSION` also lives in `src/dashboard_data_plotter/version.py` and increments for each packaged build
+- Each build should be tagged in git as `MAJOR.BUILD` (for example `3.19`)
+- The in-app Change Log auto-populates from git commits **since the most recent build tag**
 
 ---
 

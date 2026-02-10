@@ -55,7 +55,7 @@ from dashboard_data_plotter.data.loaders import (
 )
 from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
 from dashboard_data_plotter.utils.log import log_exception, DEFAULT_LOG_PATH
-from dashboard_data_plotter.version import APP_TITLE
+from dashboard_data_plotter.version import APP_TITLE, BUILD_VERSION, MAJOR_VERSION
 import os
 import sys
 import json
@@ -67,6 +67,7 @@ import tempfile
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 import webbrowser
+import subprocess
 
 import numpy as np
 import pandas as pd
@@ -283,6 +284,312 @@ class DashboardDataPlotter(tk.Tk):
         self._update_title_bar()
         return True
 
+    def _changelog_user_path(self) -> str:
+        base_dir = os.path.join(os.path.expanduser("~"),
+                                ".dashboard_data_plotter")
+        return os.path.join(base_dir, "CHANGELOG.md")
+
+    def _changelog_repo_path(self) -> str:
+        return os.path.normpath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "..",
+                "..",
+                "..",
+                "CHANGELOG.md",
+            )
+        )
+
+    def _changelog_packaged_path(self) -> str:
+        if getattr(sys, "_MEIPASS", None):
+            return os.path.join(sys._MEIPASS, "CHANGELOG.md")
+        return ""
+
+    def _current_version_prefix(self) -> str:
+        return f"{MAJOR_VERSION}.{BUILD_VERSION}"
+
+    def _current_build_tag(self) -> str:
+        return self._current_version_prefix()
+
+    def _default_changelog_text(self) -> str:
+        today = datetime.now().date().isoformat()
+        version_prefix = self._current_version_prefix()
+        return (
+            "# Change Log\n\n"
+            f"{version_prefix} - {today} - Change log initialized\n"
+            f"  - {version_prefix}.1 - Added initial change log entry\n"
+            "\n"
+            "<!-- AUTO-CHANGELOG-START -->\n"
+            "<!-- AUTO-CHANGELOG-END -->\n"
+        )
+
+    def _ensure_changelog_file(self) -> str:
+        user_path = self._changelog_user_path()
+        user_dir = os.path.dirname(user_path)
+        if not os.path.isdir(user_dir):
+            try:
+                os.makedirs(user_dir, exist_ok=True)
+            except OSError:
+                pass
+
+        candidate_paths = [
+            user_path,
+            self._changelog_repo_path(),
+            self._changelog_packaged_path(),
+        ]
+        packaged_path = self._changelog_packaged_path()
+        for path in candidate_paths:
+            if path and os.path.isfile(path):
+                if path != packaged_path:
+                    self._update_changelog_from_git(path)
+                return path
+
+        try:
+            with open(user_path, "w", encoding="utf-8") as handle:
+                handle.write(self._default_changelog_text())
+            self._update_changelog_from_git(user_path)
+            return user_path
+        except OSError:
+            return ""
+
+    def _git_latest_build_tag(self) -> str | None:
+        repo_root = os.path.normpath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "..")
+        )
+        try:
+            result = subprocess.run(
+                ["git", "tag", "--list", "--sort=-v:refname"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception:
+            return None
+
+        if result.returncode != 0:
+            return None
+
+        current_tag = self._current_build_tag()
+        tags = []
+        for raw in result.stdout.splitlines():
+            tag = raw.strip()
+            if not tag:
+                continue
+            if not re.match(r"^\d+\.\d+$", tag):
+                continue
+            tags.append(tag)
+
+        if current_tag in tags:
+            return current_tag
+
+        return tags[0] if tags else None
+
+    def _git_log_entries(self, limit: int = 50) -> tuple[list[tuple[str, str]], str | None]:
+        repo_root = os.path.normpath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "..")
+        )
+        tag = self._git_latest_build_tag()
+        cmd = ["git", "log", f"-n{limit}",
+               "--pretty=format:%ad|%s", "--date=short"]
+        if tag:
+            cmd = ["git", "log", f"{tag}..HEAD",
+                   "--pretty=format:%ad|%s", "--date=short"]
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception:
+            return [], tag
+
+        if result.returncode != 0:
+            return [], tag
+
+        entries = []
+        for raw_line in result.stdout.splitlines():
+            if "|" not in raw_line:
+                continue
+            date_str, subject = raw_line.split("|", 1)
+            subject = subject.strip()
+            if not subject or subject.lower().startswith("merge "):
+                continue
+            entries.append((date_str.strip(), subject))
+        return entries, tag
+
+    def _build_auto_changelog_section(self) -> list[str]:
+        entries, tag = self._git_log_entries()
+        version_prefix = self._current_version_prefix()
+        today = datetime.now().date().isoformat()
+
+        lines = [
+            "<!-- AUTO-CHANGELOG-START -->",
+        ]
+
+        if not entries:
+            lines.extend(
+                [
+                    f"{version_prefix} - {today} - (Describe changes)",
+                    f"  - {version_prefix}.1 - (Describe change)",
+                ]
+            )
+        else:
+            if tag:
+                lines.append(
+                    f"{version_prefix} - {today} - Auto-generated from git history since tag {tag}"
+                )
+            else:
+                lines.append(
+                    f"{version_prefix} - {today} - Auto-generated from git history (no build tag found)"
+                )
+            total = len(entries)
+            for idx, (date_str, subject) in enumerate(entries):
+                sequence = total - idx
+                lines.append(
+                    f"  - {version_prefix}.{sequence} - {date_str} - {subject}")
+
+        lines.append("<!-- AUTO-CHANGELOG-END -->")
+        return lines
+
+    def _update_changelog_from_git(self, path: str) -> None:
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                content = handle.read()
+        except OSError:
+            return
+
+        auto_lines = self._build_auto_changelog_section()
+        start_marker = "<!-- AUTO-CHANGELOG-START -->"
+        end_marker = "<!-- AUTO-CHANGELOG-END -->"
+
+        if start_marker in content and end_marker in content:
+            before, rest = content.split(start_marker, 1)
+            _, after = rest.split(end_marker, 1)
+            updated = before.rstrip() + "\n\n" + "\n".join(auto_lines) + "\n" + after.lstrip()
+        else:
+            lines = content.splitlines()
+            insert_at = 0
+            if lines and lines[0].lstrip().startswith("#"):
+                insert_at = 1
+                if len(lines) > 1 and not lines[1].strip():
+                    insert_at = 2
+            updated_lines = lines[:insert_at] + [""] + \
+                auto_lines + [""] + lines[insert_at:]
+            updated = "\n".join(updated_lines)
+
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(updated.rstrip() + "\n")
+        except OSError:
+            return
+
+    def _render_markdown(self, widget: tk.Text, markdown_text: str) -> None:
+        widget.configure(state="normal")
+        widget.delete("1.0", "end")
+
+        base_font = ("Segoe UI", 10)
+        widget.tag_configure("base", font=base_font)
+        widget.tag_configure("h1", font=("Segoe UI", 14, "bold"))
+        widget.tag_configure("h2", font=("Segoe UI", 12, "bold"))
+        widget.tag_configure("h3", font=("Segoe UI", 11, "bold"))
+        widget.tag_configure("bullet", lmargin1=18, lmargin2=28)
+        widget.tag_configure("indent", lmargin1=32, lmargin2=42)
+        widget.tag_configure("bold", font=("Segoe UI", 10, "bold"))
+
+        def insert_with_bold(text: str, tag: str) -> None:
+            parts = re.split(r"(\\*\\*[^*]+\\*\\*)", text)
+            for part in parts:
+                if part.startswith("**") and part.endswith("**") and len(part) > 4:
+                    widget.insert("end", part[2:-2], ("bold",))
+                else:
+                    widget.insert("end", part, (tag,))
+
+        for raw_line in markdown_text.splitlines():
+            line = raw_line.rstrip("\n")
+            stripped = line.lstrip()
+            if not stripped:
+                widget.insert("end", "\n", ("base",))
+                continue
+
+            if stripped.startswith("<!--") and stripped.endswith("-->"):
+                continue
+
+            if stripped.startswith("#"):
+                level = len(stripped) - len(stripped.lstrip("#"))
+                text = stripped[level:].strip()
+                tag = "h1" if level == 1 else "h2" if level == 2 else "h3"
+                widget.insert("end", text + "\n", (tag,))
+                continue
+
+            if line.startswith("  - "):
+                bullet_text = line[4:]
+                widget.insert("end", "• ", ("indent",))
+                insert_with_bold(bullet_text, "indent")
+                widget.insert("end", "\n", ("indent",))
+                continue
+
+            if stripped.startswith("- "):
+                bullet_text = stripped[2:]
+                widget.insert("end", "• ", ("bullet",))
+                insert_with_bold(bullet_text, "bullet")
+                widget.insert("end", "\n", ("bullet",))
+                continue
+
+            insert_with_bold(line, "base")
+            widget.insert("end", "\n", ("base",))
+
+        widget.configure(state="disabled")
+
+    def _open_changelog(self) -> None:
+        changelog_path = self._ensure_changelog_file()
+        if not changelog_path:
+            messagebox.showerror(
+                "Change Log",
+                "Unable to locate or create CHANGELOG.md.",
+            )
+            return
+
+        try:
+            with open(changelog_path, "r", encoding="utf-8") as handle:
+                changelog_text = handle.read()
+        except OSError as exc:
+            messagebox.showerror(
+                "Change Log", f"Failed to read change log: {exc}")
+            return
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Change Log")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry("720x640")
+
+        container = ttk.Frame(dialog, padding=10)
+        container.pack(fill="both", expand=True)
+
+        text_frame = ttk.Frame(container)
+        text_frame.pack(fill="both", expand=True)
+
+        text_widget = tk.Text(text_frame, wrap="word")
+        text_widget.pack(side="left", fill="both", expand=True)
+
+        scrollbar = ttk.Scrollbar(
+            text_frame, orient="vertical", command=text_widget.yview)
+        scrollbar.pack(side="right", fill="y")
+        text_widget.configure(yscrollcommand=scrollbar.set)
+
+        self._render_markdown(text_widget, changelog_text)
+
+        btn_frame = ttk.Frame(container)
+        btn_frame.pack(fill="x", pady=(10, 0))
+        ttk.Button(btn_frame, text="Close",
+                   command=dialog.destroy).pack(side="right")
+
+        dialog.bind("<Escape>", lambda _e: dialog.destroy(), add=True)
+        dialog.focus_set()
+
     # ---------------- UI ----------------
     def _build_ui(self):
         self.columnconfigure(0, weight=0)
@@ -303,6 +610,9 @@ class DashboardDataPlotter(tk.Tk):
         self.btn_save_project = ttk.Button(
             proj_btns, text="Save project...", command=self.save_project, width=12)
         self.btn_save_project.grid(row=0, column=2, padx=(6, 0))
+        self.btn_change_log = ttk.Button(
+            proj_btns, text="Change log", command=self._open_changelog, width=12)
+        self.btn_change_log.grid(row=0, column=3, sticky="e", padx=(140, 0))
 
         data_btns = ttk.Frame(left)
         data_btns.grid(row=2, column=0, sticky="ew", pady=(0, 0))

@@ -226,6 +226,7 @@ def _snapshot_plot_settings(
     range_high: str,
     range_fixed: bool,
     remove_outliers: bool,
+    outlier_method: str,
     outlier_threshold: str,
     radar_background: bool,
     compare: bool,
@@ -243,6 +244,7 @@ def _snapshot_plot_settings(
         "range_high": range_high,
         "range_fixed": range_fixed,
         "remove_outliers": remove_outliers,
+        "outlier_method": outlier_method,
         "outlier_threshold": outlier_threshold,
         "radar_background": radar_background,
         "compare": compare,
@@ -338,6 +340,7 @@ def _render_plot_controls() -> None:
     _setdefault_state("range_high", "")
     _setdefault_state("range_fixed", False)
     _setdefault_state("remove_outliers", False)
+    _setdefault_state("outlier_method", "Impulse")
     _setdefault_state("outlier_threshold", "4.0")
     _setdefault_state("radar_background", True)
     _setdefault_state("compare", False)
@@ -409,10 +412,16 @@ def _render_plot_controls() -> None:
         range_fixed = st.checkbox("Fixed", key="range_fixed")
 
     st.markdown("**Outlier removal**")
-    outlier_cols = st.columns([3, 3])
+    outlier_cols = st.columns([2, 3, 3])
     with outlier_cols[0]:
-        remove_outliers = st.checkbox("Remove outliers (MAD)", key="remove_outliers")
+        remove_outliers = st.checkbox("Active", key="remove_outliers")
     with outlier_cols[1]:
+        outlier_method = st.selectbox(
+            "Method",
+            ["MAD", "Phase-MAD", "Hampel", "Impulse"],
+            key="outlier_method",
+        )
+    with outlier_cols[2]:
         outlier_threshold = st.text_input("Threshold", key="outlier_threshold")
 
     radar_background = st.checkbox("Background image", key="radar_background")
@@ -517,6 +526,7 @@ def _render_plot_controls() -> None:
                     baseline_id=baseline_id,
                     sentinels=sentinels,
                     outlier_threshold=resolved_outlier_threshold,
+                    outlier_method=outlier_method,
                     close_loop=close_loop,
                 )
                 fig = go.Figure()
@@ -552,6 +562,7 @@ def _render_plot_controls() -> None:
                     baseline_id=baseline_id,
                     sentinels=sentinels,
                     outlier_threshold=resolved_outlier_threshold,
+                    outlier_method=outlier_method,
                     close_loop=close_loop,
                 )
                 fig = go.Figure()
@@ -576,6 +587,7 @@ def _render_plot_controls() -> None:
                     baseline_id=baseline_id,
                     sentinels=sentinels,
                     outlier_threshold=resolved_outlier_threshold,
+                    outlier_method=outlier_method,
                 )
                 fig = go.Figure(data=[go.Bar(x=data.labels, y=data.values)])
                 layout_kwargs = dict(title=f"{metric_col}", xaxis_title="Dataset")
@@ -595,6 +607,7 @@ def _render_plot_controls() -> None:
                     baseline_id=baseline_id,
                     sentinels=sentinels,
                     outlier_threshold=resolved_outlier_threshold,
+                    outlier_method=outlier_method,
                 )
                 fig = go.Figure()
                 for trace in data.traces:
@@ -634,6 +647,7 @@ def _render_plot_controls() -> None:
                     range_high=range_high,
                     range_fixed=range_fixed,
                     remove_outliers=remove_outliers,
+                    outlier_method=outlier_method,
                     outlier_threshold=outlier_threshold,
                     radar_background=radar_background,
                     compare=compare,
@@ -726,7 +740,8 @@ def main() -> None:
             st.info("Cleaning config is stored in project settings.")
             st.caption("TODO: Wire these controls to core/cleaning.py (CleaningSettings).")
             st.text_input("Sentinel values", value=DEFAULT_SENTINELS, key="clean_sentinels")
-            st.checkbox("Remove outliers (MAD)", key="clean_outliers")
+            st.checkbox("Remove outliers", key="clean_outliers")
+            st.selectbox("Method", ["MAD", "Phase-MAD", "Hampel", "Impulse"], key="clean_outlier_method")
             st.text_input("Outlier threshold", value="4.0", key="clean_outlier_threshold")
 
         elif step == "Align":

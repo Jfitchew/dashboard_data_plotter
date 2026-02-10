@@ -13,4 +13,5 @@ class CleaningSettings:
 
     sentinels: list[float] = field(default_factory=list)
     remove_outliers: bool = False
-    outlier_threshold: Optional[float] = None
+    outlier_threshold: Optional[float] = 4.0
+    outlier_method: str = "impulse"

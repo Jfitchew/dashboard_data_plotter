@@ -23,6 +23,7 @@ and resistant to accidental semantic breakage.
 - Saved files include a `__project_settings__` block with plot/cleaning settings, dataset order, visibility, and plot history
 - Rename datasets without changing their identity
 - Toggle dataset visibility (Show / Hide)
+- Export the currently displayed plot data to CSV
 
 ### Supported JSON formats
 
@@ -191,7 +192,7 @@ This will:
 
 The Streamlit UI mirrors most plotting controls from the Tkinter app, including:
 - Plot type selection (Radar / Cartesian / Bar / Time series)
-- Close loop, outlier removal (MAD), fixed range
+- Close loop, outlier removal (MAD / Phase-MAD / Hampel / Impulse), fixed range
 - Baseline comparison
 - Optional background images/bands
 - Plot history (Prev / Next / Delete)

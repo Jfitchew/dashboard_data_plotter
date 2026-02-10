@@ -17,7 +17,7 @@ from dashboard_data_plotter.data.loaders import (
 )
 
 PROJECT_SETTINGS_KEY = "__project_settings__"
-PROJECT_SETTINGS_VERSION = 2
+PROJECT_SETTINGS_VERSION = 3
 
 
 def build_project_settings(state: ProjectState) -> dict[str, Any]:
@@ -47,6 +47,7 @@ def build_project_settings(state: ProjectState) -> dict[str, Any]:
             "close_loop": plot.close_loop,
             "use_plotly": plot.use_plotly,
             "radar_background": plot.radar_background,
+            "use_original_binned": plot.use_original_binned,
             "range_low": plot.range_low,
             "range_high": plot.range_high,
             "range_fixed": plot.range_fixed,
@@ -55,6 +56,7 @@ def build_project_settings(state: ProjectState) -> dict[str, Any]:
             "sentinels": list(cleaning.sentinels),
             "remove_outliers": cleaning.remove_outliers,
             "outlier_threshold": cleaning.outlier_threshold,
+            "outlier_method": cleaning.outlier_method,
         },
         "analysis": {
             "stats_mode": state.analysis_settings.stats_mode,
@@ -100,6 +102,8 @@ def apply_project_settings(state: ProjectState, settings: dict[str, Any]) -> Non
             state.plot_settings.use_plotly = bool(plot.get("use_plotly"))
         if "radar_background" in plot:
             state.plot_settings.radar_background = bool(plot.get("radar_background"))
+        if "use_original_binned" in plot:
+            state.plot_settings.use_original_binned = bool(plot.get("use_original_binned"))
         if "range_low" in plot:
             state.plot_settings.range_low = str(plot.get("range_low") or "")
         if "range_high" in plot:
@@ -119,6 +123,8 @@ def apply_project_settings(state: ProjectState, settings: dict[str, Any]) -> Non
             state.cleaning_settings.remove_outliers = bool(cleaning.get("remove_outliers"))
         if "outlier_threshold" in cleaning:
             state.cleaning_settings.outlier_threshold = cleaning.get("outlier_threshold")
+        if "outlier_method" in cleaning:
+            state.cleaning_settings.outlier_method = str(cleaning.get("outlier_method") or "impulse")
 
     if isinstance(analysis, dict):
         if "stats_mode" in analysis:

@@ -21,6 +21,7 @@ class PlotSettings:
     close_loop: bool = True
     use_plotly: bool = False
     radar_background: bool = True
+    use_original_binned: bool = False
     range_low: str = ""
     range_high: str = ""
     range_fixed: bool = False
@@ -31,6 +32,7 @@ class ProjectState:
     """Shared, UI-agnostic project state for loaded datasets and settings."""
 
     loaded: dict[str, pd.DataFrame] = field(default_factory=dict)
+    binned: dict[str, pd.DataFrame] = field(default_factory=dict)
     id_to_display: dict[str, str] = field(default_factory=dict)
     display_to_id: dict[str, str] = field(default_factory=dict)
     show_flag: dict[str, bool] = field(default_factory=dict)
@@ -41,6 +43,7 @@ class ProjectState:
 
     def clear(self) -> None:
         self.loaded.clear()
+        self.binned.clear()
         self.id_to_display.clear()
         self.display_to_id.clear()
         self.show_flag.clear()
@@ -78,12 +81,18 @@ def set_baseline(state: ProjectState, baseline_source_id: str) -> None:
     state.plot_settings.baseline_source_id = str(baseline_source_id)
 
 
+def set_use_original_binned(state: ProjectState, use_original_binned: bool) -> None:
+    state.plot_settings.use_original_binned = bool(use_original_binned)
+
+
 def update_cleaning_settings(
     state: ProjectState,
     sentinels: Iterable[float],
     remove_outliers: bool,
     outlier_threshold: Optional[float],
+    outlier_method: str,
 ) -> None:
     state.cleaning_settings.sentinels = list(sentinels)
     state.cleaning_settings.remove_outliers = bool(remove_outliers)
     state.cleaning_settings.outlier_threshold = outlier_threshold
+    state.cleaning_settings.outlier_method = str(outlier_method or "impulse")

@@ -29,7 +29,6 @@ from dashboard_data_plotter.core.datasets import (
 from dashboard_data_plotter.core.io import (
     extract_project_settings,
     apply_project_settings,
-    load_project_from_file,
     build_project_payload,
     PROJECT_SETTINGS_KEY,
 )
@@ -142,7 +141,11 @@ class ToolTip:
 class DashboardDataPlotter(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(APP_TITLE)
+        self.project_title = "Untitled Project"
+        self.project_path = ""
+        self._project_dirty = False
+        self._suspend_dirty = False
+        self._update_title_bar()
         self.geometry("1360x876")
         self._init_styles()
 
@@ -196,6 +199,7 @@ class DashboardDataPlotter(tk.Tk):
         self._set_plot_type_controls_state()
         self._set_compare_controls_state()
         self._update_outlier_show_state()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _init_styles(self):
         try:
@@ -234,6 +238,51 @@ class DashboardDataPlotter(tk.Tk):
         colors = self._dataset_color_cycle()
         return {sid: colors[idx % len(colors)] for idx, sid in enumerate(ids)}
 
+    def _update_title_bar(self):
+        title = self.project_title or "Untitled Project"
+        dirty = " *" if self._project_dirty else ""
+        self.title(f"{APP_TITLE} — {title}{dirty}")
+
+    def _mark_dirty(self):
+        if self._suspend_dirty:
+            return
+        if not self._project_dirty:
+            self._project_dirty = True
+            self._update_title_bar()
+
+    def _clear_dirty(self):
+        if self._project_dirty:
+            self._project_dirty = False
+        self._update_title_bar()
+
+    def _prompt_save_if_dirty(self, action_label: str) -> bool:
+        if not self._project_dirty:
+            return True
+        choice = messagebox.askyesnocancel(
+            "Unsaved changes",
+            f"The current project has unsaved changes.\n\nSave before {action_label}?",
+        )
+        if choice is None:
+            return False
+        if choice:
+            return self.save_project()
+        return True
+
+    def _sanitize_filename(self, name: str) -> str:
+        base = re.sub(r"[<>:\"/\\\\|?*]+", "_", name).strip()
+        return base if base else "project"
+
+    def _ensure_project_title(self) -> bool:
+        if self.project_title and self.project_title != "Untitled Project":
+            return True
+        title = simpledialog.askstring(
+            "Project title", "Enter a title for this project:", parent=self)
+        if not title:
+            return False
+        self.project_title = title.strip() or "Untitled Project"
+        self._update_title_bar()
+        return True
+
     # ---------------- UI ----------------
     def _build_ui(self):
         self.columnconfigure(0, weight=0)
@@ -243,36 +292,44 @@ class DashboardDataPlotter(tk.Tk):
         left = ttk.Frame(self, padding=10)
         left.grid(row=0, column=0, sticky="ns")
 
-        ttk.Label(left, text="Data sources", font=(
-            "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+        proj_btns = ttk.Frame(left)
+        proj_btns.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        self.btn_new_project = ttk.Button(
+            proj_btns, text="New project", command=self.new_project, width=12)
+        self.btn_new_project.grid(row=0, column=0, sticky="ew")
+        self.btn_load_project = ttk.Button(
+            proj_btns, text="Load project...", command=self.load_project, width=12)
+        self.btn_load_project.grid(row=0, column=1, padx=(6, 0))
+        self.btn_save_project = ttk.Button(
+            proj_btns, text="Save project...", command=self.save_project, width=12)
+        self.btn_save_project.grid(row=0, column=2, padx=(6, 0))
 
-        btns = ttk.Frame(left)
-        btns.grid(row=1, column=0, sticky="ew", pady=(6, 6))
+        data_btns = ttk.Frame(left)
+        data_btns.grid(row=2, column=0, sticky="ew", pady=(0, 0))
+        ttk.Label(data_btns, text="Data sources", font=(
+            "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
         self.btn_add_files = ttk.Button(
-            btns, text="Add JSON file(s)...", command=self.add_files)
-        self.btn_add_files.grid(row=0, column=0, sticky="ew")
-        self.btn_save_all = ttk.Button(
-            btns, text="Save all", command=self.save_all_datasets, width=8)
-        self.btn_save_all.grid(row=0, column=1, padx=(6, 0))
+            data_btns, text="Add data file(s)...", command=self.add_files)
+        self.btn_add_files.grid(row=0, column=1, padx=(16, 0))
         self.btn_remove = ttk.Button(
-            btns, text="Remove", command=self.remove_selected, width=8)
-        self.btn_remove.grid(row=0, column=2, padx=(6, 0))
+            data_btns, text="Remove", command=self.remove_selected, width=8)
+        self.btn_remove.grid(row=0, column=2, padx=(6, 0), pady=(0, 0))
         self.btn_clear_all = ttk.Button(
-            btns, text="Clear all", command=self.clear_all, width=8)
-        self.btn_clear_all.grid(row=0, column=3, padx=(6, 0))
+            data_btns, text="Remove all", command=self.clear_all, width=11)
+        self.btn_clear_all.grid(row=0, column=3, padx=(3, 0), pady=(0, 0))
         self.btn_rename = ttk.Button(
-            btns, text="Rename", command=self.rename_selected, width=8)
-        self.btn_rename.grid(row=0, column=4, padx=(6, 0))
+            data_btns, text="Rename", command=self.rename_selected, width=8)
+        self.btn_rename.grid(row=0, column=4, padx=(6, 0), pady=(0, 0))
         self.btn_move_up = ttk.Button(
-            btns, text="Up", command=self.move_selected_up, width=3)
-        self.btn_move_up.grid(row=0, column=5, padx=(6, 0))
+            data_btns, text="Up", command=self.move_selected_up, width=3)
+        self.btn_move_up.grid(row=0, column=5, padx=(6, 0), pady=(0, 0))
         self.btn_move_down = ttk.Button(
-            btns, text="Dn", command=self.move_selected_down, width=3)
-        self.btn_move_down.grid(row=0, column=6, padx=(6, 0))
+            data_btns, text="Dn", command=self.move_selected_down, width=3)
+        self.btn_move_down.grid(row=0, column=6, padx=(3, 0), pady=(0, 0))
 
         # Treeview: show checkbox + dataset name
         tv_frame = ttk.Frame(left)
-        tv_frame.grid(row=2, column=0, sticky="ew")
+        tv_frame.grid(row=3, column=0, sticky="ew")
         tv_frame.columnconfigure(0, weight=1)
 
         self.files_tree = ttk.Treeview(
@@ -304,23 +361,27 @@ class DashboardDataPlotter(tk.Tk):
 
         # --- Paste JSON sources
         paste_header = ttk.Frame(left)
-        paste_header.grid(row=3, column=0, sticky="ew", pady=(10, 0))
-        ttk.Label(paste_header, text="Paste JSON data sources", font=(
+        paste_header.grid(row=4, column=0, sticky="w", pady=(0, 5))
+        ttk.Label(paste_header, text="Paste data source", font=(
             "Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=(0, 0))
 
-        self.outlier_warnings_chk = ttk.Checkbutton(
-            paste_header,
-            text="Outlier warnings?",
-            variable=self.outlier_warnings_var,
-            command=self._on_outlier_warnings_toggle,
-        )
-        self.outlier_warnings_chk.grid(
-            row=0, column=1, sticky="e", padx=(180, 0), pady=(0, 10))
+        paste_btns = ttk.Frame(left)
+        paste_btns.grid(row=4, column=0, sticky="e",
+                        padx=(0, 30), pady=(10, 0))
+        self.btn_load_paste = ttk.Button(
+            paste_btns, text="Load pasted data", command=self.load_from_paste)
+        self.btn_load_paste.grid(row=0, column=0, sticky="ew")
+        self.btn_save_paste = ttk.Button(
+            paste_btns, text="Save pasted data...", command=self.save_pasted_json)
+        self.btn_save_paste.grid(row=0, column=1, padx=(6, 0))
+        self.btn_clear_paste = ttk.Button(
+            paste_btns, text="Clear pasted data", command=self.clear_paste)
+        self.btn_clear_paste.grid(row=0, column=2, padx=(6, 0))
 
         paste_frame = ttk.Frame(left)
-        paste_frame.grid(row=4, column=0, sticky="ew")
+        paste_frame.grid(row=5, column=0, sticky="ew")
 
-        self.paste_text = tk.Text(paste_frame, height=6, width=52, wrap="none")
+        self.paste_text = tk.Text(paste_frame, height=6, width=60, wrap="none")
         self.paste_text.grid(row=0, column=0, sticky="ew")
 
         paste_scroll = ttk.Scrollbar(
@@ -343,25 +404,22 @@ class DashboardDataPlotter(tk.Tk):
 
         self.paste_text.bind("<Button-3>", self._show_paste_menu, add=True)
 
-        paste_btns = ttk.Frame(left)
-        paste_btns.grid(row=5, column=0, sticky="ew", pady=(2, 6))
-        self.btn_load_paste = ttk.Button(
-            paste_btns, text="Load pasted JSON", command=self.load_from_paste)
-        self.btn_load_paste.grid(row=0, column=0, sticky="ew")
-        self.btn_save_paste = ttk.Button(
-            paste_btns, text="Save pasted JSON...", command=self.save_pasted_json)
-        self.btn_save_paste.grid(row=0, column=1, padx=(6, 0))
-        self.btn_clear_paste = ttk.Button(
-            paste_btns, text="Clear pasted", command=self.clear_paste)
-        self.btn_clear_paste.grid(row=0, column=2, padx=(6, 0))
-
-        ttk.Separator(left).grid(row=6, column=0, sticky="ew", pady=10)
+        ttk.Separator(left).grid(row=7, column=0, sticky="ew", pady=10)
 
         ttk.Label(left, text="Plot settings", font=(
-            "Segoe UI", 11, "bold")).grid(row=7, column=0, sticky="w")
+            "Segoe UI", 11, "bold")).grid(row=8, column=0, sticky="w")
+
+        self.outlier_warnings_chk = ttk.Checkbutton(
+            left,
+            text="Outlier warnings?",
+            variable=self.outlier_warnings_var,
+            command=self._on_outlier_warnings_toggle,
+        )
+        self.outlier_warnings_chk.grid(
+            row=8, column=0, sticky="e", padx=(180, 0))
 
         angle_frame = ttk.Frame(left)
-        angle_frame.grid(row=8, column=0, sticky="ew", pady=(6, 2))
+        angle_frame.grid(row=9, column=0, sticky="ew", pady=(6, 2))
 
         # Plot type (radar/cartesian/bar)
         ttk.Label(angle_frame, text="Plot type:").grid(
@@ -413,7 +471,7 @@ class DashboardDataPlotter(tk.Tk):
         self.close_loop_chk.grid(row=1, column=1, sticky="e", padx=(0, 70))
 
         metric_frame = ttk.Frame(left)
-        metric_frame.grid(row=9, column=0, sticky="ew", pady=(6, 2))
+        metric_frame.grid(row=10, column=0, sticky="ew", pady=(6, 2))
         ttk.Label(metric_frame, text="Metric column:").grid(
             row=0, column=0, sticky="w")
         self.metric_combo = ttk.Combobox(
@@ -466,7 +524,7 @@ class DashboardDataPlotter(tk.Tk):
         self.outlier_show_chk.grid(row=0, column=6, sticky="w", padx=(20, 0))
 
         range_frame = ttk.Frame(left)
-        range_frame.grid(row=10, column=0, sticky="ew", pady=(6, 2))
+        range_frame.grid(row=11, column=0, sticky="ew", pady=(6, 2))
         ttk.Label(range_frame, text="Range (min, max):").grid(
             row=0, column=0, sticky="w")
         self.range_low_entry = ttk.Entry(
@@ -483,7 +541,7 @@ class DashboardDataPlotter(tk.Tk):
         self.original_binned_btn.grid(
             row=0, column=4, sticky="w", padx=(20, 0))
 
-        ttk.Separator(left).grid(row=12, column=0, sticky="ew", pady=10)
+        ttk.Separator(left).grid(row=12, column=0, sticky="ew", pady=6)
 
         # Value mode
         ttk.Label(left, text="Value mode", font=("Segoe UI", 11, "bold")).grid(
@@ -499,7 +557,7 @@ class DashboardDataPlotter(tk.Tk):
             vm_frame, text="% of dataset mean", variable=self.value_mode_var, value="percent_mean")
         self.rb_percent_mean.grid(row=0, column=1, sticky="w", padx=(20, 0))
 
-        ttk.Separator(left).grid(row=15, column=0, sticky="ew", pady=10)
+        ttk.Separator(left).grid(row=15, column=0, sticky="ew", pady=6)
 
         # Comparison mode
         ttk.Label(left, text="Comparison mode", font=(
@@ -516,7 +574,7 @@ class DashboardDataPlotter(tk.Tk):
                                            values=[], state="readonly", width=30)
         self.baseline_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
-        ttk.Separator(left).grid(row=18, column=0, sticky="ew", pady=10)
+        ttk.Separator(left).grid(row=18, column=0, sticky="ew", pady=6)
 
         plot_btns = ttk.Frame(left)
         plot_btns.grid(row=19, column=0, sticky="ew", pady=(10, 0))
@@ -541,7 +599,8 @@ class DashboardDataPlotter(tk.Tk):
             plot_btns, text="Clear", command=self._clear_history, state="disabled", width=6)
         self.clear_history_btn.grid(row=0, column=4, padx=(6, 0))
         self.history_label_var = tk.StringVar(value="History 0/0")
-        self.history_label = ttk.Label(plot_btns, textvariable=self.history_label_var)
+        self.history_label = ttk.Label(
+            plot_btns, textvariable=self.history_label_var)
         self.history_label.grid(row=0, column=5, padx=(8, 0))
 
         style = ttk.Style()
@@ -599,17 +658,55 @@ class DashboardDataPlotter(tk.Tk):
             outlier_threshold=outlier_threshold,
             outlier_method=outlier_method,
         )
+        self._mark_dirty()
 
     def _datasets_from_json_obj(self, obj):
-        datasets = extract_named_datasets(obj)
         out = []
+        if isinstance(obj, dict):
+            if "rideData" in obj and isinstance(obj["rideData"], list):
+                records = obj["rideData"]
+                df = pd.DataFrame(records)
+                for c in df.columns:
+                    df[c] = pd.to_numeric(df[c], errors="coerce")
+                out.append((
+                    "Dataset",
+                    df,
+                    str(obj.get("__source_id__", "")) or "",
+                    str(obj.get("__display__", "")) or "",
+                ))
+                return out
+
+            for name, value in obj.items():
+                if isinstance(value, dict) and "rideData" in value and isinstance(value["rideData"], list):
+                    records = value["rideData"]
+                    df = pd.DataFrame(records)
+                    for c in df.columns:
+                        df[c] = pd.to_numeric(df[c], errors="coerce")
+                    out.append((
+                        str(name),
+                        df,
+                        str(value.get("__source_id__", "")) or "",
+                        str(value.get("__display__", "")) or "",
+                    ))
+                elif isinstance(value, list):
+                    records = value
+                    if records and not isinstance(records[0], dict):
+                        continue
+                    df = pd.DataFrame(records)
+                    for c in df.columns:
+                        df[c] = pd.to_numeric(df[c], errors="coerce")
+                    out.append((str(name), df, "", ""))
+            if out:
+                return out
+
+        datasets = extract_named_datasets(obj)
         for name, records in datasets:
             if not isinstance(records, list) or (len(records) > 0 and not isinstance(records[0], dict)):
                 continue
             df = pd.DataFrame(records)
             for c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
-            out.append((str(name), df))
+            out.append((str(name), df, "", ""))
         return out
 
     def _binned_from_json_obj(self, obj):
@@ -700,11 +797,14 @@ class DashboardDataPlotter(tk.Tk):
 
     def _add_tooltips(self):
         tips = [
-            (self.btn_add_files, "Load one or more JSON datasets from file."),
+            (self.btn_new_project, "Start a new (empty) project."),
+            (self.btn_load_project, "Load a saved project JSON file."),
+            (self.btn_save_project,
+             "Save the current project to a JSON file (optionally include plot history)."),
+            (self.btn_add_files, "Add one or more data files to this project."),
             (self.btn_remove, "Remove the selected dataset(s) from the list."),
             (self.btn_rename, "Rename the selected dataset."),
             (self.btn_clear_all, "Remove all loaded datasets."),
-            (self.btn_save_all, "Save all datasets to a single JSON file in current order."),
             (self.btn_move_up, "Move the selected dataset(s) up in plot order."),
             (self.btn_move_down, "Move the selected dataset(s) down in plot order."),
             (self.files_tree, "Datasets in plot order. Click 'Show' to toggle visibility."),
@@ -777,7 +877,7 @@ class DashboardDataPlotter(tk.Tk):
         self.ax.set_theta_direction(-1)
         self.ax.set_title("Load data → choose metric & angle → Plot", pad=18)
         self.ax.grid(True)
-        self.ax.set_position([0.02, 0.08, 0.8, 0.8])
+        # self.ax.set_position([0.05, 0.08, 0.8, 0.8])
         self.canvas.draw_idle()
 
     # ---------------- UI state helpers ----------------
@@ -1418,12 +1518,13 @@ class DashboardDataPlotter(tk.Tk):
             saved = dict(snap)
             show_flag = snap.get("show_flag", {})
             if isinstance(show_flag, dict):
-                saved_show = {}
-                for sid, flag in show_flag.items():
-                    display = self.state.id_to_display.get(sid, sid)
-                    if display:
-                        saved_show[str(display)] = bool(flag)
-                saved["show_flag"] = saved_show
+                # Persist visibility by source_id so history does not remap onto
+                # unrelated datasets when display names are de-duplicated on load.
+                saved["show_flag"] = {
+                    str(sid): bool(flag)
+                    for sid, flag in show_flag.items()
+                    if sid
+                }
             payload.append(saved)
         return payload
 
@@ -1442,9 +1543,14 @@ class DashboardDataPlotter(tk.Tk):
             show_flag = snap.get("show_flag", {})
             if isinstance(show_flag, dict):
                 restored_show = {}
-                for name, flag in show_flag.items():
-                    sid = self.state.display_to_id.get(str(name))
-                    if sid:
+                for key, flag in show_flag.items():
+                    sid = str(key)
+                    if sid in self.state.loaded:
+                        restored_show[sid] = bool(flag)
+                        continue
+                    # Backward compatibility for old saves that keyed by display name.
+                    sid = self.state.display_to_id.get(str(key))
+                    if sid and sid in self.state.loaded:
                         restored_show[sid] = bool(flag)
                 restored["show_flag"] = restored_show
             new_history.append(restored)
@@ -1475,6 +1581,7 @@ class DashboardDataPlotter(tk.Tk):
             self._history.append(snapshot)
             self._history_index = len(self._history) - 1
         self._update_history_buttons()
+        self._mark_dirty()
 
     def _apply_snapshot(self, snap):
         missing = []
@@ -1596,6 +1703,7 @@ class DashboardDataPlotter(tk.Tk):
         if self._history_index >= len(self._history):
             self._history_index = len(self._history) - 1
         self._update_history_buttons()
+        self._mark_dirty()
 
     def _clear_history(self):
         if not self._history:
@@ -1642,6 +1750,7 @@ class DashboardDataPlotter(tk.Tk):
         if self.files_tree.exists(source_id):
             name = self.files_tree.item(source_id, "values")[1]
             self.files_tree.item(source_id, values=(show_txt, name))
+        self._mark_dirty()
 
     def toggle_all_show(self):
         items = list(ordered_source_ids(self.state))
@@ -1656,6 +1765,7 @@ class DashboardDataPlotter(tk.Tk):
             if self.files_tree.exists(iid):
                 name = self.files_tree.item(iid, "values")[1]
                 self.files_tree.item(iid, values=(show_txt, name))
+        self._mark_dirty()
 
     def rename_selected(self):
         sel = list(self.files_tree.selection())
@@ -1680,6 +1790,7 @@ class DashboardDataPlotter(tk.Tk):
             order[idx - 1], order[idx] = order[idx], order[idx - 1]
         reorder_datasets(self.state, order)
         self._sync_treeview_from_state()
+        self._mark_dirty()
 
     def move_selected_down(self):
         sel = list(self.files_tree.selection())
@@ -1696,6 +1807,7 @@ class DashboardDataPlotter(tk.Tk):
             order[idx + 1], order[idx] = order[idx], order[idx + 1]
         reorder_datasets(self.state, order)
         self._sync_treeview_from_state()
+        self._mark_dirty()
 
     def sort_by_dataset_name(self):
         items = ordered_source_ids(self.state)
@@ -1715,6 +1827,7 @@ class DashboardDataPlotter(tk.Tk):
         self.files_tree.heading(
             "name", text="Dataset" + arrow, command=self.sort_by_dataset_name)
         self._dataset_sort_reverse = not reverse
+        self._mark_dirty()
 
     def get_plot_order_source_ids(self):
         return ordered_source_ids(self.state)
@@ -1736,6 +1849,7 @@ class DashboardDataPlotter(tk.Tk):
         if self.baseline_display_var.get() == old:
             self.baseline_display_var.set(new_name)
         self.refresh_baseline_choices()
+        self._mark_dirty()
 
     def _register_dataset(self, source_id: str, display: str, df: pd.DataFrame):
         display = display if display else "Dataset"
@@ -1744,6 +1858,7 @@ class DashboardDataPlotter(tk.Tk):
         self._sync_treeview_from_state()
         if not self.baseline_display_var.get():
             self.baseline_display_var.set(display)
+        self._mark_dirty()
 
     def _unique_paste_source_id(self, display: str) -> str:
         base = f"PASTE::{display}"
@@ -1756,10 +1871,21 @@ class DashboardDataPlotter(tk.Tk):
             candidate = f"{base} ({i})"
         return candidate
 
+    def _unique_project_source_id(self, display: str, source_id: str = "") -> str:
+        base = source_id.strip() if source_id else f"PROJECT::{display}"
+        if base not in self.state.loaded:
+            return base
+        i = 2
+        candidate = f"{base} ({i})"
+        while candidate in self.state.loaded:
+            i += 1
+            candidate = f"{base} ({i})"
+        return candidate
+
     # ---------------- File load / paste ----------------
     def add_files(self):
         paths = filedialog.askopenfilenames(
-            title="Select JSON file(s)",
+            title="Select data file(s)",
             filetypes=[
                 ("JSON / TXT", ("*.json", "*.txt")),
                 ("JSON", ("*.json",)),
@@ -1773,14 +1899,15 @@ class DashboardDataPlotter(tk.Tk):
         added = 0
         for p in paths:
             try:
-                datasets, settings = load_project_from_file(p)
                 obj = load_json_file_obj(p)
+                datasets = self._datasets_from_json_obj(obj)
                 binned_by_name = self._binned_from_json_obj(obj)
                 if not datasets:
                     raise ValueError("No valid datasets found in JSON file.")
                 base = os.path.splitext(os.path.basename(p))[0]
-                for name, df in datasets:
-                    display = base if name == "Dataset" else str(name)
+                for name, df, _source_id, display_override in datasets:
+                    display = display_override or (
+                        base if name == "Dataset" else str(name))
                     source_id = p if name == "Dataset" else f"{p}:::{display}"
                     if source_id in self.state.loaded:
                         continue
@@ -1790,10 +1917,6 @@ class DashboardDataPlotter(tk.Tk):
                     if binned_df is not None:
                         self.state.binned[source_id] = binned_df
                     added += 1
-                if settings:
-                    apply_project_settings(self.state, settings)
-                    self._sync_ui_from_state_settings()
-                    self._apply_history_settings(settings)
             except Exception as e:
                 log_exception("load data from JSON failed")
                 messagebox.showerror(
@@ -1806,6 +1929,7 @@ class DashboardDataPlotter(tk.Tk):
             self._refresh_angle_choices()
             self.refresh_baseline_choices()
             self._auto_default_metric()
+            self._mark_dirty()
 
     def _show_paste_menu(self, event):
         try:
@@ -1831,15 +1955,14 @@ class DashboardDataPlotter(tk.Tk):
             obj = json.loads(raw)
             datasets = self._datasets_from_json_obj(obj)
             binned_by_name = self._binned_from_json_obj(obj)
-            settings = extract_project_settings(obj)
         except Exception as e:
             messagebox.showerror("Paste load error",
                                  f"{type(e).__name__}: {e}")
             return
 
         added = 0
-        for name, df in datasets:
-            display = make_unique_name(
+        for name, df, _source_id, display_override in datasets:
+            display = display_override or make_unique_name(
                 str(name), set(self.state.display_to_id.keys()))
             source_id = self._unique_paste_source_id(display)
             try:
@@ -1866,10 +1989,8 @@ class DashboardDataPlotter(tk.Tk):
         self._refresh_angle_choices()
         self.refresh_baseline_choices()
         self._auto_default_metric()
-        if settings:
-            apply_project_settings(self.state, settings)
-            self._sync_ui_from_state_settings()
-            self._apply_history_settings(settings)
+        if added:
+            self._mark_dirty()
 
     def save_pasted_json(self):
         raw = self.paste_text.get("1.0", "end").strip()
@@ -1993,32 +2114,135 @@ class DashboardDataPlotter(tk.Tk):
         if not cur and displays:
             self.baseline_display_var.set(displays[0])
 
-    # ---------------- Saving ----------------
-    def save_all_datasets(self):
-        if not self.state.loaded:
-            messagebox.showinfo("Save All", "No datasets are loaded.")
+    # ---------------- Project lifecycle ----------------
+    def _reset_project_state(self):
+        for iid in self.files_tree.get_children(""):
+            self.files_tree.delete(iid)
+        self.state.clear()
+        self._history.clear()
+        self._history_index = -1
+        self._update_history_buttons()
+        self._mark_dirty()
+        self.refresh_metric_choices()
+        self.refresh_baseline_choices()
+        self._refresh_angle_choices()
+        self._auto_default_metric()
+        self._redraw_empty()
+
+    def new_project(self):
+        if not self._prompt_save_if_dirty("starting a new project"):
             return
+        self._suspend_dirty = True
+        try:
+            self._reset_project_state()
+            self.project_title = "Untitled Project"
+            self.project_path = ""
+            self._clear_dirty()
+        finally:
+            self._suspend_dirty = False
+        self.status.set("Started a new project.")
+
+    def load_project(self):
+        if not self._prompt_save_if_dirty("loading a new project"):
+            return
+        path = filedialog.askopenfilename(
+            title="Load project",
+            filetypes=[("Project JSON", ("*.json",)), ("All files", ("*.*",))],
+        )
+        if not path:
+            return
+        try:
+            obj = load_json_file_obj(path)
+            settings = extract_project_settings(obj) or {}
+            datasets = self._datasets_from_json_obj(obj)
+            binned_by_name = self._binned_from_json_obj(obj)
+            if not datasets:
+                raise ValueError("No valid datasets found in JSON file.")
+
+            self._suspend_dirty = True
+            self._reset_project_state()
+
+            for name, df, source_id, display_override in datasets:
+                display = display_override or str(name)
+                source_id = self._unique_project_source_id(display, source_id)
+                self._register_dataset(
+                    source_id=source_id, display=display, df=df)
+                binned_df = binned_by_name.get(str(name))
+                if binned_df is not None:
+                    self.state.binned[source_id] = binned_df
+
+            if settings:
+                apply_project_settings(self.state, settings)
+                self._sync_ui_from_state_settings()
+                self._apply_history_settings(settings)
+
+            self._sync_treeview_from_state()
+            self.refresh_metric_choices()
+            self._refresh_angle_choices()
+            self.refresh_baseline_choices()
+            self._auto_default_metric()
+
+            self.project_title = str(
+                settings.get("project_title") or "").strip()
+            if not self.project_title:
+                self.project_title = os.path.splitext(
+                    os.path.basename(path))[0]
+            self.project_path = path
+            self._clear_dirty()
+            self.status.set(f"Loaded project: {os.path.basename(path)}")
+        except Exception as e:
+            log_exception("load_project failed")
+            messagebox.showerror(
+                "Load failed", f"{type(e).__name__}: {e}\n\nLog: {DEFAULT_LOG_PATH}")
+        finally:
+            self._suspend_dirty = False
+
+    def save_project(self) -> bool:
+        if not self._ensure_project_title():
+            return False
+        include_history = messagebox.askyesno(
+            "Save plot history",
+            "Do you want to save your plot history with this project?",
+        )
+        initial_dir = os.path.dirname(
+            self.project_path) if self.project_path else ""
+        initial_name = f"{self._sanitize_filename(self.project_title)}.json"
         out_path = filedialog.asksaveasfilename(
-            title="Save all datasets",
+            title="Save project",
             defaultextension=".json",
-            initialfile=f"all_datasets_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            initialdir=initial_dir or None,
+            initialfile=initial_name,
             filetypes=[("JSON", ("*.json",)), ("All files", ("*.*",))],
         )
         if not out_path:
-            return
+            return False
         try:
             payload = build_project_payload(self.state)
             settings = payload.get(PROJECT_SETTINGS_KEY)
             if isinstance(settings, dict):
-                settings["plot_history"] = self._history_payload()
-                settings["plot_history_index"] = self._history_index
+                settings["project_title"] = self.project_title
+                if include_history:
+                    settings["plot_history"] = self._history_payload()
+                    settings["plot_history_index"] = self._history_index
+                else:
+                    settings.pop("plot_history", None)
+                    settings.pop("plot_history_index", None)
             with open(out_path, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle, indent=2)
-            self.status.set(f"Saved {len(self.state.loaded)} dataset(s) to: {out_path}")
+            self.project_path = out_path
+            self._clear_dirty()
+            self.status.set(f"Saved project to: {out_path}")
+            return True
         except Exception as e:
-            log_exception("save_all_datasets failed")
+            log_exception("save_project failed")
             messagebox.showerror(
                 "Save failed", f"{type(e).__name__}: {e}\n\nLog: {DEFAULT_LOG_PATH}")
+            return False
+
+    def _on_close(self):
+        if not self._prompt_save_if_dirty("closing the application"):
+            return
+        self.destroy()
 
     # ---------------- Remove / clear ----------------
     def remove_selected(self):
@@ -2031,6 +2255,7 @@ class DashboardDataPlotter(tk.Tk):
         self.refresh_metric_choices()
         self.refresh_baseline_choices()
         self.status.set(f"Total loaded: {len(self.state.loaded)}")
+        self._mark_dirty()
         if not self.state.loaded:
             self._redraw_empty()
 
@@ -2038,10 +2263,14 @@ class DashboardDataPlotter(tk.Tk):
         for iid in self.files_tree.get_children(""):
             self.files_tree.delete(iid)
         self.state.clear()
+        self._history.clear()
+        self._history_index = -1
+        self._update_history_buttons()
         self.refresh_metric_choices()
         self.refresh_baseline_choices()
         self.status.set("Cleared all data sources.")
         self._redraw_empty()
+        self._mark_dirty()
 
     # ---------------- Plotting ----------------    # ---------------- Plotting ----------------
     def _open_plotly_figure(self, fig: go.Figure, title: str):
@@ -2796,7 +3025,7 @@ class DashboardDataPlotter(tk.Tk):
                 return
 
             x = np.arange(len(data.labels))
-            self.fig.subplots_adjust(left=0.08, right=0.98)
+            # self.fig.subplots_adjust(left=0.08, right=0.98)
             baseline_label = data.baseline_label if data.compare else None
             baseline_handle = self.ax.axhline(
                 0.0, color=baseline_color if compare else "black",

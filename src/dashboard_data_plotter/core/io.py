@@ -165,7 +165,11 @@ def build_project_payload(state: ProjectState) -> dict[str, Any]:
         name = make_unique_name(display, existing)
         existing.add(name)
         df = state.loaded[sid]
-        payload[name] = {"rideData": df_to_jsonable_records(df)}
+        payload[name] = {
+            "rideData": df_to_jsonable_records(df),
+            "__source_id__": sid,
+            "__display__": display,
+        }
     payload[PROJECT_SETTINGS_KEY] = build_project_settings(state)
     return payload
 

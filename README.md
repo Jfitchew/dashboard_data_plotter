@@ -16,11 +16,13 @@ and resistant to accidental semantic breakage.
 ## Core capabilities
 
 ### Data loading
-- Load **one or more JSON files** from disk
+- Start with an **untitled project** or load a saved project JSON
+- Add **one or more data files** (JSON/TXT today; CSV planned)
 - Load **multi‑dataset JSON objects** (file‑based or pasted)
 - Paste JSON objects directly into the UI
-- Save all currently loaded datasets into a **single multi‑dataset JSON**
-- Saved files include a `__project_settings__` block with plot/cleaning settings, dataset order, visibility, and plot history
+- Project title is stored in the project JSON and used as the default save filename
+- Save the **entire project** to JSON (prompted to include plot history)
+- Project files include a `__project_settings__` block with project title, plot/cleaning settings, dataset order, visibility, and plot history (if saved)
 - Rename datasets without changing their identity
 - Toggle dataset visibility (Show / Hide)
 - Export the currently displayed plot data to CSV
@@ -42,6 +44,9 @@ and resistant to accidental semantic breakage.
   "R2": { "rideData": [ {...}, {...} ] }
 }
 ```
+
+Project saves may also include per‑dataset metadata inside each dataset object:
+`__source_id__` and `__display__` are used to keep plot history aligned with dataset identity.
 
 Each dataset typically represents **~52 angular bins** over a full 360° cycle,
 but the app is tolerant of missing or sparse data.

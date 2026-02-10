@@ -1288,6 +1288,30 @@ class DashboardDataPlotter(tk.Tk):
             return None
         return float(np.nanmin(arr)), float(np.nanmax(arr))
 
+    def _bar_label_decimals(self, values) -> int:
+        arr = np.asarray(values, dtype=float).ravel()
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            return 0
+        spread = float(np.nanmax(arr) - np.nanmin(arr))
+        max_abs = float(np.nanmax(np.abs(arr)))
+        scale = spread if spread > 0 else (max_abs if max_abs > 0 else 1.0)
+        resolution = max(scale / 200.0, 1e-9)
+        return int(np.clip(np.ceil(-np.log10(resolution)), 0, 6))
+
+    def _format_bar_value(self, value: float, decimals: int) -> str:
+        text = f"{float(value):.{decimals}f}"
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return text if text else "0"
+
+    def _bar_label_layout(self, labels: list[str]) -> tuple[int, float]:
+        longest = max((len(str(label)) for label in labels), default=0)
+        font_size = 8 if longest > 15 else 9
+        extra = max(0, longest - 15)
+        bottom_margin = min(0.22 + extra * 0.004, 0.42)
+        return font_size, bottom_margin
+
     def _on_plot_type_change(self):
         plot_type = self.plot_type_var.get()
         is_bar = (plot_type == "bar")
@@ -2632,13 +2656,25 @@ class DashboardDataPlotter(tk.Tk):
 
         bar_colors = [color_map.get(self.state.display_to_id.get(
             label, ""), "#1f77b4") for label in data.labels]
+        decimals = self._bar_label_decimals(data.values)
+        text_values = [self._format_bar_value(v, decimals) for v in data.values]
+        longest_label = max((len(str(label)) for label in data.labels), default=0)
+        tick_font_size = 9 if longest_label <= 15 else 8
         fig = go.Figure()
-        fig.add_bar(x=data.labels, y=data.values, marker_color=bar_colors)
+        fig.add_bar(
+            x=data.labels,
+            y=data.values,
+            marker_color=bar_colors,
+            text=text_values,
+            textposition="outside",
+            cliponaxis=False,
+        )
         fig.update_layout(
             title=title,
             xaxis_title="Dataset",
             yaxis_title=y_title,
             xaxis_tickangle=-45,
+            xaxis=dict(automargin=True, tickfont=dict(size=tick_font_size)),
         )
         if fixed_range:
             fig.update_yaxes(range=[fixed_range[0], fixed_range[1]])
@@ -3343,9 +3379,17 @@ class DashboardDataPlotter(tk.Tk):
 
             bar_colors = [color_map.get(self.state.display_to_id.get(
                 label, ""), "#1f77b4") for label in data.labels]
-            self.ax.bar(x, data.values, color=bar_colors)
+            bars = self.ax.bar(x, data.values, color=bar_colors)
             self.ax.set_xticks(x)
-            self.ax.set_xticklabels(data.labels, rotation=45, ha="right")
+            tick_font_size, bottom_margin = self._bar_label_layout(data.labels)
+            self.ax.set_xticklabels(
+                data.labels,
+                rotation=45,
+                ha="right",
+                rotation_mode="anchor",
+                fontsize=tick_font_size,
+            )
+            self.fig.subplots_adjust(bottom=bottom_margin)
 
             mode_str = data.mode_label
             if data.compare:
@@ -3361,6 +3405,31 @@ class DashboardDataPlotter(tk.Tk):
 
             if fixed_range:
                 self.ax.set_ylim(fixed_range[0], fixed_range[1])
+
+            decimals = self._bar_label_decimals(data.values)
+            text_values = [self._format_bar_value(v, decimals) for v in data.values]
+            y_values = np.asarray(data.values, dtype=float)
+            y_span = float(np.nanmax(y_values) - np.nanmin(y_values)) if y_values.size else 0.0
+            y_max_abs = float(np.nanmax(np.abs(y_values))) if y_values.size else 0.0
+            y_offset = max(y_span * 0.02, y_max_abs * 0.015, 1e-6)
+            for bar, y_val, label_text in zip(bars, y_values, text_values):
+                x_pos = bar.get_x() + bar.get_width() / 2
+                if data.compare and y_val < 0:
+                    y_pos = 0.0 - y_offset
+                    va = "top"
+                else:
+                    y_pos = y_val + y_offset
+                    va = "bottom"
+                self.ax.text(
+                    x_pos,
+                    y_pos,
+                    label_text,
+                    ha="center",
+                    va=va,
+                    fontsize=8,
+                )
+            if not fixed_range:
+                self.ax.margins(y=0.14)
 
             self.ax.grid(True, axis="y", linestyle=":")
             low, high = self.ax.get_ylim()

@@ -81,6 +81,9 @@ but the app is tolerant of missing or sparse data.
 - Supports:
   - Absolute values
   - Difference vs baseline
+- Shows value labels on bars with spread-aware rounding
+  - In comparison mode, positive labels are shown above bars and negative labels at the base near zero
+- X-axis label spacing adapts to long dataset names, with smaller tick font for names longer than 15 characters
 - Explicitly **does not use crank angle**
 - “% of dataset mean” is intentionally disabled for bar plots
 

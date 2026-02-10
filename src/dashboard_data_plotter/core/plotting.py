@@ -4,9 +4,9 @@ from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 import numpy as np
-
 from dashboard_data_plotter.core.datasets import ordered_source_ids
 from dashboard_data_plotter.core.state import ProjectState
+from dashboard_data_plotter.core.analysis import rolling_360_medians_for_bar
 from dashboard_data_plotter.data.loaders import (
     aggregate_metric,
     apply_outlier_filter,
@@ -57,6 +57,9 @@ class CartesianPlotData:
 class BarPlotData:
     labels: list[str] = field(default_factory=list)
     values: list[float] = field(default_factory=list)
+    whisker_low: list[float] = field(default_factory=list)
+    whisker_high: list[float] = field(default_factory=list)
+    whisker_n: list[int] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     mode_label: str = "absolute"
     agg_label: str = "Mean"
@@ -197,6 +200,7 @@ def _series_roll_360(
         raise ValueError("No complete 360deg windows after filtering.")
     x = np.arange(len(out), dtype=float)
     return x, np.asarray(out, dtype=float)
+
 
 
 def _resolve_sentinels(
@@ -597,6 +601,29 @@ def prepare_bar_plot(
                     val = val - baseline_value
             data.labels.append(label)
             data.values.append(val)
+
+            roll_medians = rolling_360_medians_for_bar(
+                plot_df,
+                metric_col=metric_col,
+                sentinels=sentinels,
+                outlier_threshold=outlier_threshold,
+                outlier_method=outlier_method,
+            )
+            roll_medians = roll_medians[np.isfinite(roll_medians)]
+            if compare and baseline_value is not None and sid != baseline_id and roll_medians.size:
+                roll_medians = roll_medians - baseline_value
+
+            if roll_medians.size >= 2:
+                q1, q3 = np.quantile(roll_medians, [0.25, 0.75])
+                whisk_low = max(0.0, float(val - q1))
+                whisk_high = max(0.0, float(q3 - val))
+                data.whisker_low.append(whisk_low)
+                data.whisker_high.append(whisk_high)
+                data.whisker_n.append(int(roll_medians.size))
+            else:
+                data.whisker_low.append(0.0)
+                data.whisker_high.append(0.0)
+                data.whisker_n.append(int(roll_medians.size))
         except Exception as exc:
             data.errors.append(f"{label}: {exc}")
 

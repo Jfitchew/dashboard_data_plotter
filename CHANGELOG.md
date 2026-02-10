@@ -45,4 +45,5 @@
 <!-- AUTO-CHANGELOG-END -->
 ## Manual Entries
 3.19 - 2026-02-10 - Manual notes
+  - 3.19.42 - Added Plot Stats analysis button (13 grouped angle ranges for radar/cartesian), bar rolling-360 whiskers, and pairwise significance summaries.
   - 3.19.41 - Implemented auto-populated changelog from git.

@@ -21,7 +21,7 @@ from dashboard_data_plotter.data.loaders import (
 )
 from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
 from dashboard_data_plotter.utils.log import log_exception, DEFAULT_LOG_PATH
-from dashboard_data_plotter.version import APP_TITLE
+from dashboard_data_plotter.version import APP_TITLE, BUILD_VERSION, MAJOR_VERSION
 import os
 import sys
 import json
@@ -218,6 +218,9 @@ class DashboardDataPlotter(tk.Tk):
         self.btn_move_down = ttk.Button(
             btns, text="Dn", command=self.move_selected_down, width=3)
         self.btn_move_down.grid(row=0, column=6, padx=(6, 0))
+        self.btn_change_log = ttk.Button(
+            btns, text="Change Log", command=self.show_change_log, width=10)
+        self.btn_change_log.grid(row=0, column=7, padx=(6, 0))
 
         # Treeview: show checkbox + dataset name
         tv_frame = ttk.Frame(left)
@@ -485,6 +488,7 @@ class DashboardDataPlotter(tk.Tk):
             (self.btn_save_all, "Save all datasets to a single JSON file in current order."),
             (self.btn_move_up, "Move the selected dataset(s) up in plot order."),
             (self.btn_move_down, "Move the selected dataset(s) down in plot order."),
+            (self.btn_change_log, "View the changelog for recent updates."),
             (self.files_tree, "Datasets in plot order. Click 'Show' to toggle visibility."),
             (self.paste_text,
              "Paste a JSON dataset object or a multi-dataset JSON blob here."),
@@ -2658,6 +2662,103 @@ class DashboardDataPlotter(tk.Tk):
                 "assets",
             )
         )
+
+    def _changelog_path(self):
+        if getattr(sys, "_MEIPASS", None):
+            return os.path.join(sys._MEIPASS, "CHANGELOG.md")
+        candidates = [
+            os.path.join(os.getcwd(), "CHANGELOG.md"),
+            os.path.abspath(
+                os.path.join(
+                    os.path.dirname(__file__),
+                    "..",
+                    "..",
+                    "..",
+                    "CHANGELOG.md",
+                )
+            ),
+        ]
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                return candidate
+        return candidates[-1]
+
+    def _ensure_changelog_exists(self, path: str):
+        if os.path.exists(path):
+            return
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            today = datetime.now().strftime("%Y-%m-%d")
+            version_prefix = f"{MAJOR_VERSION}.{BUILD_VERSION}"
+            content = (
+                "# Changelog\n\n"
+                f"{version_prefix} - {today} - Initial changelog created\n"
+                f"    - {version_prefix}.1 - Changelog initialized\n"
+            )
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(content)
+        except Exception:
+            pass
+
+    def _render_markdown_into_text(self, widget: tk.Text, content: str):
+        widget.configure(state="normal")
+        widget.delete("1.0", tk.END)
+        widget.tag_configure("h1", font=("Segoe UI", 13, "bold"))
+        widget.tag_configure("h2", font=("Segoe UI", 11, "bold"))
+        widget.tag_configure("bullet", lmargin1=18, lmargin2=36)
+        widget.tag_configure("subbullet", lmargin1=36, lmargin2=54)
+        for line in content.splitlines():
+            stripped = line.lstrip()
+            if not stripped:
+                widget.insert(tk.END, "\n")
+                continue
+            if stripped.startswith("## "):
+                widget.insert(tk.END, stripped[3:] + "\n", "h2")
+            elif stripped.startswith("# "):
+                widget.insert(tk.END, stripped[2:] + "\n", "h1")
+            elif line.startswith("    - "):
+                widget.insert(tk.END, "◦ " + line[6:].rstrip() + "\n", "subbullet")
+            elif line.startswith("    * "):
+                widget.insert(tk.END, "◦ " + line[6:].rstrip() + "\n", "subbullet")
+            elif stripped.startswith("- "):
+                widget.insert(tk.END, "• " + stripped[2:] + "\n", "bullet")
+            elif stripped.startswith("* "):
+                widget.insert(tk.END, "• " + stripped[2:] + "\n", "bullet")
+            else:
+                widget.insert(tk.END, stripped + "\n")
+        widget.configure(state="disabled")
+
+    def show_change_log(self):
+        log_path = self._changelog_path()
+        self._ensure_changelog_exists(log_path)
+        try:
+            with open(log_path, "r", encoding="utf-8") as handle:
+                content = handle.read()
+        except Exception as exc:
+            messagebox.showerror("Change Log", f"Unable to load changelog:\n{exc}")
+            return
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Change Log")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry("720x520")
+
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill="both", expand=True)
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        text = tk.Text(frame, wrap="word", font=("Segoe UI", 10))
+        text.grid(row=0, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=text.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        text.configure(yscrollcommand=scroll.set)
+
+        self._render_markdown_into_text(text, content)
+
+        btn = ttk.Button(frame, text="Close", command=dialog.destroy)
+        btn.grid(row=1, column=0, columnspan=2, pady=(10, 0))
 
     def _apply_radar_background_plotly(self, fig):
         if not self.radar_background_var.get():

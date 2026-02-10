@@ -102,6 +102,7 @@ When comparison mode is enabled:
   - Paste JSON pane
   - Plot settings
   - Comparison controls
+  - Change Log button (opens the Markdown changelog)
 - **Right panel**
   - Matplotlib figure canvas
   - Toolbar (zoom, pan, save image)

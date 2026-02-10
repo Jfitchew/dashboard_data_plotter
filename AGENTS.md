@@ -80,6 +80,7 @@ Agents must follow the rules below.
 - Preserve function signatures
 - Add helpers instead of duplicating logic
 - Update README if behaviour changes
+- Add a summary of code changes to CHANGELOG.md (and remove them if changes are rolled back)
 - Run through the testing checklist mentally
 
 ---

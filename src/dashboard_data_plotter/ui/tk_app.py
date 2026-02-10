@@ -969,12 +969,13 @@ class DashboardDataPlotter(tk.Tk):
             saved = dict(snap)
             show_flag = snap.get("show_flag", {})
             if isinstance(show_flag, dict):
-                saved_show = {}
-                for sid, flag in show_flag.items():
-                    display = self.state.id_to_display.get(sid, sid)
-                    if display:
-                        saved_show[str(display)] = bool(flag)
-                saved["show_flag"] = saved_show
+                # Persist visibility by source_id so history does not remap onto
+                # unrelated datasets when display names are de-duplicated on load.
+                saved["show_flag"] = {
+                    str(sid): bool(flag)
+                    for sid, flag in show_flag.items()
+                    if sid
+                }
             payload.append(saved)
         return payload
 
@@ -993,9 +994,14 @@ class DashboardDataPlotter(tk.Tk):
             show_flag = snap.get("show_flag", {})
             if isinstance(show_flag, dict):
                 restored_show = {}
-                for name, flag in show_flag.items():
-                    sid = self.state.display_to_id.get(str(name))
-                    if sid:
+                for key, flag in show_flag.items():
+                    sid = str(key)
+                    if sid in self.state.loaded:
+                        restored_show[sid] = bool(flag)
+                        continue
+                    # Backward compatibility for old saves that keyed by display name.
+                    sid = self.state.display_to_id.get(str(key))
+                    if sid and sid in self.state.loaded:
                         restored_show[sid] = bool(flag)
                 restored["show_flag"] = restored_show
             new_history.append(restored)

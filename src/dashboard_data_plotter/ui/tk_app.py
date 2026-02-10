@@ -157,6 +157,7 @@ class DashboardDataPlotter(tk.Tk):
         self.outlier_method_var = tk.StringVar(value="Impulse")
         self.outlier_thresh_var = tk.StringVar(value="4.0")
         self.show_outliers_var = tk.BooleanVar(value=False)
+        self.outlier_warnings_var = tk.BooleanVar(value=True)
         self.close_loop_var = tk.BooleanVar(value=True)
         self.sentinels_var = tk.StringVar(value=DEFAULT_SENTINELS)
 
@@ -301,8 +302,17 @@ class DashboardDataPlotter(tk.Tk):
             "<Double-1>", self._on_tree_double_click, add=True)
 
         # --- Paste JSON sources
-        ttk.Label(left, text="Paste JSON data sources", font=(
-            "Segoe UI", 10, "bold")).grid(row=3, column=0, sticky="w", pady=(10, 0))
+        paste_header = ttk.Frame(left)
+        paste_header.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        self.outlier_warnings_chk = ttk.Checkbutton(
+            paste_header,
+            text="Outlier warnings?",
+            variable=self.outlier_warnings_var,
+            command=self._on_outlier_warnings_toggle,
+        )
+        self.outlier_warnings_chk.grid(row=0, column=0, sticky="w")
+        ttk.Label(paste_header, text="Paste JSON data sources", font=(
+            "Segoe UI", 10, "bold")).grid(row=0, column=1, sticky="w", padx=(14, 0))
 
         paste_frame = ttk.Frame(left)
         paste_frame.grid(row=4, column=0, sticky="ew", pady=(6, 6))
@@ -722,6 +732,8 @@ class DashboardDataPlotter(tk.Tk):
              "Lower = more aggressive removal."),
             (self.outlier_show_chk,
              "Show detected outlier points on the plot."),
+            (self.outlier_warnings_chk,
+             "When unticked, warnings about likely outliers in plotted data are hidden."),
             (self.range_low_entry,
              "Lower y-axis bound for the plot area (used when Fixed is on).\n"
              "Does not change or filter the data."),
@@ -909,6 +921,14 @@ class DashboardDataPlotter(tk.Tk):
             pass
         self._update_outlier_show_state()
 
+    def _on_outlier_warnings_toggle(self):
+        if self.outlier_warnings_var.get():
+            return
+        messagebox.showwarning(
+            "Outlier warnings disabled",
+            "You will no longer see warnings of outliers in the data metrics that you plot which may lead to visual artefacts. Consider applying the Outlier Removal method to improve the data plots.",
+        )
+
     def _update_outlier_show_state(self):
         allowed = self._can_show_outliers()
         if not allowed:
@@ -1008,6 +1028,8 @@ class DashboardDataPlotter(tk.Tk):
         return sids
 
     def _warn_outliers_if_needed(self, plot_type, angle_col, metric_col, sentinels, compare, baseline_id):
+        if not self.outlier_warnings_var.get():
+            return
         if self._restoring_history:
             return
         if self.show_outliers_var.get() and self._can_show_outliers():
@@ -1057,6 +1079,8 @@ class DashboardDataPlotter(tk.Tk):
             )
 
     def _warn_outlier_removal_rate(self, plot_type, angle_col, metric_col, sentinels, compare, baseline_id, threshold):
+        if not self.outlier_warnings_var.get():
+            return
         if self._restoring_history:
             return
         if not self.remove_outliers_var.get():
@@ -1342,6 +1366,7 @@ class DashboardDataPlotter(tk.Tk):
             "outlier_method": self.outlier_method_var.get(),
             "outlier_threshold": self.outlier_thresh_var.get(),
             "show_outliers": bool(self.show_outliers_var.get()),
+            "outlier_warnings": bool(self.outlier_warnings_var.get()),
             "compare": bool(self.compare_var.get()),
             "baseline_display": self.baseline_display_var.get(),
             "range_low": self.range_low_var.get(),
@@ -1424,6 +1449,8 @@ class DashboardDataPlotter(tk.Tk):
             snap.get("outlier_threshold", self.outlier_thresh_var.get()))
         self.show_outliers_var.set(
             bool(snap.get("show_outliers", self.show_outliers_var.get())))
+        self.outlier_warnings_var.set(
+            bool(snap.get("outlier_warnings", self.outlier_warnings_var.get())))
         self._on_outlier_toggle()
         self.compare_var.set(bool(snap.get("compare", self.compare_var.get())))
         self.baseline_display_var.set(

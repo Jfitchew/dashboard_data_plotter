@@ -20,7 +20,7 @@ and resistant to accidental semantic breakage.
 - Load **multi‑dataset JSON objects** (file‑based or pasted)
 - Paste JSON objects directly into the UI
 - Save all currently loaded datasets into a **single multi‑dataset JSON**
-- Saved files include a `__project_settings__` block with plot/cleaning settings, dataset order, and visibility
+- Saved files include a `__project_settings__` block with plot/cleaning settings, dataset order, visibility, and plot history
 - Rename datasets without changing their identity
 - Toggle dataset visibility (Show / Hide)
 

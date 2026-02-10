@@ -29,7 +29,8 @@ from dashboard_data_plotter.core.io import (
     extract_project_settings,
     apply_project_settings,
     load_project_from_file,
-    save_project_to_file,
+    build_project_payload,
+    PROJECT_SETTINGS_KEY,
 )
 from dashboard_data_plotter.core.plotting import (
     prepare_radar_plot,
@@ -465,6 +466,12 @@ class DashboardDataPlotter(tk.Tk):
         self.next_btn = ttk.Button(
             plot_btns, text="Next", command=self._plot_next, state="disabled", width=5)
         self.next_btn.grid(row=0, column=3, padx=(2, 0))
+        self.clear_history_btn = ttk.Button(
+            plot_btns, text="Clear", command=self._clear_history, state="disabled", width=6)
+        self.clear_history_btn.grid(row=0, column=4, padx=(6, 0))
+        self.history_label_var = tk.StringVar(value="History 0/0")
+        self.history_label = ttk.Label(plot_btns, textvariable=self.history_label_var)
+        self.history_label.grid(row=0, column=5, padx=(8, 0))
 
         style = ttk.Style()
         style.configure("Red.TButton", background="red", foreground="black")
@@ -649,6 +656,8 @@ class DashboardDataPlotter(tk.Tk):
             (self.prev_btn, "Go to the previous plot in history."),
             (self.delete_btn, "Remove the current plot from history."),
             (self.next_btn, "Go to the next plot in history."),
+            (self.clear_history_btn, "Clear all plot history entries."),
+            (self.history_label, "Current position within the plot history."),
         ]
         for widget, text in tips:
             ToolTip(widget, text)
@@ -932,6 +941,7 @@ class DashboardDataPlotter(tk.Tk):
     def _update_history_buttons(self):
         if not hasattr(self, "prev_btn") or not hasattr(self, "next_btn") or not hasattr(self, "delete_btn"):
             return
+        history_len = len(self._history)
         has_current = 0 <= self._history_index < len(self._history)
         self.prev_btn.configure(
             state="normal" if self._history_index > 0 else "disabled")
@@ -941,6 +951,65 @@ class DashboardDataPlotter(tk.Tk):
         )
         self.delete_btn.configure(
             state="normal" if has_current else "disabled")
+        if hasattr(self, "clear_history_btn"):
+            self.clear_history_btn.configure(
+                state="normal" if history_len > 0 else "disabled")
+        if hasattr(self, "history_label_var"):
+            if history_len:
+                self.history_label_var.set(
+                    f"History {self._history_index + 1}/{history_len}")
+            else:
+                self.history_label_var.set("History 0/0")
+
+    def _history_payload(self):
+        payload = []
+        for snap in self._history:
+            if not isinstance(snap, dict):
+                continue
+            saved = dict(snap)
+            show_flag = snap.get("show_flag", {})
+            if isinstance(show_flag, dict):
+                saved_show = {}
+                for sid, flag in show_flag.items():
+                    display = self.state.id_to_display.get(sid, sid)
+                    if display:
+                        saved_show[str(display)] = bool(flag)
+                saved["show_flag"] = saved_show
+            payload.append(saved)
+        return payload
+
+    def _apply_history_settings(self, settings):
+        if not isinstance(settings, dict):
+            return
+        history = settings.get("plot_history")
+        if not isinstance(history, list):
+            self._update_history_buttons()
+            return
+        new_history = []
+        for snap in history:
+            if not isinstance(snap, dict):
+                continue
+            restored = dict(snap)
+            show_flag = snap.get("show_flag", {})
+            if isinstance(show_flag, dict):
+                restored_show = {}
+                for name, flag in show_flag.items():
+                    sid = self.state.display_to_id.get(str(name))
+                    if sid:
+                        restored_show[sid] = bool(flag)
+                restored["show_flag"] = restored_show
+            new_history.append(restored)
+        self._history = new_history
+        try:
+            history_index = int(settings.get("plot_history_index", -1))
+        except (TypeError, ValueError):
+            history_index = -1
+        if new_history:
+            self._history_index = max(
+                0, min(history_index, len(new_history) - 1))
+        else:
+            self._history_index = -1
+        self._update_history_buttons()
 
     def _push_history(self):
         if self._restoring_history:
@@ -1065,6 +1134,19 @@ class DashboardDataPlotter(tk.Tk):
         self._history.pop(self._history_index)
         if self._history_index >= len(self._history):
             self._history_index = len(self._history) - 1
+        self._update_history_buttons()
+
+    def _clear_history(self):
+        if not self._history:
+            return
+        confirm = messagebox.askyesno(
+            "Clear history",
+            "Clear all plot history entries?",
+        )
+        if not confirm:
+            return
+        self._history.clear()
+        self._history_index = -1
         self._update_history_buttons()
 
     # ---------------- Tree / list actions ----------------
@@ -1243,6 +1325,7 @@ class DashboardDataPlotter(tk.Tk):
                 if settings:
                     apply_project_settings(self.state, settings)
                     self._sync_ui_from_state_settings()
+                    self._apply_history_settings(settings)
             except Exception as e:
                 log_exception("load data from JSON failed")
                 messagebox.showerror(
@@ -1311,6 +1394,7 @@ class DashboardDataPlotter(tk.Tk):
         if settings:
             apply_project_settings(self.state, settings)
             self._sync_ui_from_state_settings()
+            self._apply_history_settings(settings)
 
     def save_pasted_json(self):
         raw = self.paste_text.get("1.0", "end").strip()
@@ -1397,7 +1481,13 @@ class DashboardDataPlotter(tk.Tk):
         if not out_path:
             return
         try:
-            save_project_to_file(self.state, out_path)
+            payload = build_project_payload(self.state)
+            settings = payload.get(PROJECT_SETTINGS_KEY)
+            if isinstance(settings, dict):
+                settings["plot_history"] = self._history_payload()
+                settings["plot_history_index"] = self._history_index
+            with open(out_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2)
             self.status.set(f"Saved {len(self.state.loaded)} dataset(s) to: {out_path}")
         except Exception as e:
             log_exception("save_all_datasets failed")

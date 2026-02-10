@@ -5,6 +5,12 @@ from dashboard_data_plotter.plotting.helpers import (
     fmt_delta_ticks,
     choose_decimals_from_ticks,
 )
+from dashboard_data_plotter.core.analysis import (
+    build_angle_group_stats,
+    build_bar_stats,
+    maybe_to_percent,
+    rolling_360_medians_for_bar,
+)
 from dashboard_data_plotter.core.state import (
     ProjectState,
     set_plot_type,
@@ -896,22 +902,25 @@ class DashboardDataPlotter(tk.Tk):
         self.export_plot_btn = ttk.Button(
             plot_btns, text="Export Plot Data", command=self.export_plot_data)
         self.export_plot_btn.grid(row=0, column=1, padx=(10, 0))
+        self.plot_stats_btn = ttk.Button(
+            plot_btns, text="Plot Stats", command=self.plot_stats)
+        self.plot_stats_btn.grid(row=0, column=2, padx=(6, 0))
         self.prev_btn = ttk.Button(
             plot_btns, text="Prev", command=self._plot_prev, state="disabled", width=5)
-        self.prev_btn.grid(row=0, column=2, padx=(10, 0))
+        self.prev_btn.grid(row=0, column=3, padx=(10, 0))
         self.delete_btn = ttk.Button(
             plot_btns, text="X", command=self._delete_history_entry, state="disabled", width=3)
-        self.delete_btn.grid(row=0, column=3, padx=(2, 0))
+        self.delete_btn.grid(row=0, column=4, padx=(2, 0))
         self.next_btn = ttk.Button(
             plot_btns, text="Next", command=self._plot_next, state="disabled", width=5)
-        self.next_btn.grid(row=0, column=3, padx=(2, 0))
+        self.next_btn.grid(row=0, column=5, padx=(2, 0))
         self.clear_history_btn = ttk.Button(
             plot_btns, text="Clear", command=self._clear_history, state="disabled", width=6)
-        self.clear_history_btn.grid(row=0, column=4, padx=(6, 0))
+        self.clear_history_btn.grid(row=0, column=6, padx=(6, 0))
         self.history_label_var = tk.StringVar(value="History 0/0")
         self.history_label = ttk.Label(
             plot_btns, textvariable=self.history_label_var)
-        self.history_label.grid(row=0, column=5, padx=(8, 0))
+        self.history_label.grid(row=0, column=7, padx=(8, 0))
 
         style = ttk.Style()
         style.configure("Red.TButton", background="red", foreground="black")
@@ -1172,6 +1181,7 @@ class DashboardDataPlotter(tk.Tk):
             (self.baseline_combo, "Choose the baseline dataset for comparison mode."),
             (self.plot_btn, "Plot or refresh using current settings."),
             (self.export_plot_btn, "Export the currently displayed plot data to CSV."),
+            (self.plot_stats_btn, "Run statistical correlation/significance analysis for the current plot settings."),
             (self.prev_btn, "Go to the previous plot in history."),
             (self.delete_btn, "Remove the current plot from history."),
             (self.next_btn, "Go to the next plot in history."),
@@ -2633,7 +2643,10 @@ class DashboardDataPlotter(tk.Tk):
         bar_colors = [color_map.get(self.state.display_to_id.get(
             label, ""), "#1f77b4") for label in data.labels]
         fig = go.Figure()
-        fig.add_bar(x=data.labels, y=data.values, marker_color=bar_colors)
+        error_y = None
+        if data.whisker_low and data.whisker_high and len(data.whisker_low) == len(data.values):
+            error_y = dict(type="data", symmetric=False, array=data.whisker_high, arrayminus=data.whisker_low, visible=True)
+        fig.add_bar(x=data.labels, y=data.values, marker_color=bar_colors, error_y=error_y)
         fig.update_layout(
             title=title,
             xaxis_title="Dataset",
@@ -2914,6 +2927,139 @@ class DashboardDataPlotter(tk.Tk):
         raw = re.sub(r"[^a-z0-9]+", "_",
                      str(label or "").strip().lower()).strip("_")
         return raw or default
+
+    def _format_pairwise_rows(self, pairwise_stats):
+        rows = []
+        for stat in pairwise_stats:
+            corr = "nan" if not np.isfinite(stat.correlation) else f"{stat.correlation:.4f}"
+            pval = "nan" if not np.isfinite(stat.p_value) else f"{stat.p_value:.4f}"
+            delta = "nan" if not np.isfinite(stat.mean_delta) else f"{stat.mean_delta:.4f}"
+            if np.isfinite(stat.p_value):
+                sig = "Yes" if stat.p_value < 0.05 else "No"
+            else:
+                sig = "Unknown"
+            rows.append(
+                f"{stat.dataset_a} vs {stat.dataset_b}: n={stat.n}, r={corr}, p={pval}, Δmean={delta}, significant={sig}"
+            )
+        return rows
+
+    def _show_plot_stats_text(self, title: str, lines: list[str]):
+        win = tk.Toplevel(self)
+        win.title(title)
+        win.geometry("980x620")
+        txt = tk.Text(win, wrap="word")
+        txt.pack(fill="both", expand=True)
+        txt.insert("1.0", "\n".join(lines))
+        txt.configure(state="disabled")
+
+    def plot_stats(self):
+        plot_type = (self.plot_type_var.get() or "radar").strip().lower()
+        metric_col = self.metric_var.get().strip()
+        if not metric_col:
+            messagebox.showinfo("Missing selection", "Select a metric column before running Plot Stats.")
+            return
+
+        sentinels = parse_sentinels(self.sentinels_var.get())
+        value_mode = self.value_mode_var.get()
+        agg_mode = self._normalize_agg_mode(self.agg_var.get())
+        outlier_threshold = self._get_outlier_threshold()
+        if outlier_threshold == "invalid":
+            return
+        outlier_method = self._normalize_outlier_method(self.outlier_method_var.get())
+
+        if plot_type in ("radar", "cartesian"):
+            angle_col = self.angle_var.get().strip()
+            if not angle_col:
+                messagebox.showinfo("Missing selection", "Select an angle column before running Plot Stats.")
+                return
+            traces = []
+            for sid in self.get_plot_order_source_ids():
+                if not self.state.show_flag.get(sid, True):
+                    continue
+                label = self.state.id_to_display.get(sid, sid)
+                df = self._get_plot_df_for_sid(sid, plot_type)
+                if df is None or angle_col not in df.columns or metric_col not in df.columns:
+                    continue
+                try:
+                    ang, vals = prepare_angle_value_agg(
+                        df,
+                        angle_col,
+                        metric_col,
+                        sentinels,
+                        agg=agg_mode,
+                        outlier_threshold=outlier_threshold,
+                        outlier_method=outlier_method,
+                    )
+                    vals = maybe_to_percent(vals, value_mode == "percent_mean")
+                    traces.append((label, ang, vals))
+                except Exception:
+                    continue
+            if len(traces) < 2:
+                messagebox.showinfo("Insufficient data", "Need at least two visible datasets with valid values for Plot Stats.")
+                return
+
+            stats = build_angle_group_stats(
+                traces=traces,
+                group_size=4,
+                n_bins=52,
+                metric_label=metric_col,
+                agg_label={"mean": "Mean", "median": "Median", "trimmed_mean_10": "10% trimmed mean"}.get(agg_mode, "Mean"),
+                value_mode_label="absolute" if value_mode == "absolute" else "% of mean",
+            )
+            lines = [
+                f"Plot Stats — {plot_type.title()} ({stats.agg_label}, {stats.value_mode_label})",
+                f"Metric: {stats.metric_label}",
+                "",
+                "Angle grouped significance (4 adjacent bins per group; 13 ranges total):",
+            ]
+            for group in stats.angle_ranges:
+                lines.append(f"\nRange {group.range_label}")
+                rows = self._format_pairwise_rows(group.pairwise)
+                if rows:
+                    lines.extend(rows)
+                else:
+                    lines.append("No pairwise comparisons available.")
+            self._show_plot_stats_text("Plot Stats", lines)
+            return
+
+        if plot_type == "bar":
+            series_by_label = {}
+            for sid in self.get_plot_order_source_ids():
+                if not self.state.show_flag.get(sid, True):
+                    continue
+                label = self.state.id_to_display.get(sid, sid)
+                df = self._get_plot_df_for_sid(sid, plot_type)
+                if df is None or metric_col not in df.columns:
+                    continue
+                med = rolling_360_medians_for_bar(
+                    df,
+                    metric_col=metric_col,
+                    sentinels=sentinels,
+                    outlier_threshold=outlier_threshold,
+                    outlier_method=outlier_method,
+                )
+                med = med[np.isfinite(med)]
+                if med.size:
+                    series_by_label[label] = med
+            if len(series_by_label) < 2:
+                messagebox.showinfo("Insufficient data", "Need at least two visible datasets with valid rolling 360 medians for bar Plot Stats.")
+                return
+            stats = build_bar_stats(
+                series_by_label=series_by_label,
+                metric_label=metric_col,
+                agg_label={"mean": "Mean", "median": "Median", "trimmed_mean_10": "10% trimmed mean"}.get(agg_mode, "Mean"),
+            )
+            lines = [
+                f"Plot Stats — Bar ({stats.agg_label})",
+                f"Metric: {stats.metric_label}",
+                "",
+                "Pairwise significance using rolling 360° median series:",
+            ]
+            lines.extend(self._format_pairwise_rows(stats.pairwise))
+            self._show_plot_stats_text("Plot Stats", lines)
+            return
+
+        messagebox.showinfo("Plot Stats", "Plot Stats currently supports Radar, Cartesian, and Bar plots.")
 
     def export_plot_data(self):
         if not self.state.loaded:
@@ -3343,7 +3489,10 @@ class DashboardDataPlotter(tk.Tk):
 
             bar_colors = [color_map.get(self.state.display_to_id.get(
                 label, ""), "#1f77b4") for label in data.labels]
-            self.ax.bar(x, data.values, color=bar_colors)
+            yerr = None
+            if data.whisker_low and data.whisker_high and len(data.whisker_low) == len(data.values):
+                yerr = np.vstack([np.asarray(data.whisker_low, dtype=float), np.asarray(data.whisker_high, dtype=float)])
+            self.ax.bar(x, data.values, color=bar_colors, yerr=yerr, capsize=4 if yerr is not None else 0, ecolor="#333333")
             self.ax.set_xticks(x)
             self.ax.set_xticklabels(data.labels, rotation=45, ha="right")
 

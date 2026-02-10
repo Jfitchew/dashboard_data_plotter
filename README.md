@@ -86,6 +86,19 @@ but the app is tolerant of missing or sparse data.
 
 ---
 
+### Plot Stats
+- New **Plot Stats** button runs pairwise correlation significance checks across visible datasets.
+- Radar/Cartesian:
+  - Uses the same aggregated values as the active plot settings (including absolute vs % of mean).
+  - Combines every 4 adjacent bins into one angle range.
+  - Reports significance per range for all 13 ranges across 360°.
+- Bar:
+  - Computes rolling 360° median series per dataset.
+  - Uses this variation to provide whiskers on bars.
+  - Reports pairwise significance summary from the rolling median series.
+
+---
+
 ## Comparison mode
 
 When comparison mode is enabled:

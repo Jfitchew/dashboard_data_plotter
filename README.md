@@ -26,6 +26,7 @@ and resistant to accidental semantic breakage.
 - Rename datasets without changing their identity
 - Toggle dataset visibility (Show / Hide)
 - Export the currently displayed plot data to CSV
+- Run **Plot Stats** for pairwise correlation/significance summaries (radar/cartesian by 4-bin angle ranges; bar via rolling 360° variation)
 - Open the in-app **Guide** for workflow help
 
 ### Supported JSON formats
@@ -83,6 +84,7 @@ but the app is tolerant of missing or sparse data.
   - Absolute values
   - Difference vs baseline
 - Shows value labels on bars with spread-aware rounding
+- Adds rolling-360 median spread whiskers to bars (baseline whisker suppressed in comparison mode)
   - In comparison mode, positive labels are shown above bars and negative labels at the base near zero
 - X-axis label spacing adapts to long dataset names, with smaller tick font for names longer than 15 characters
 - Explicitly **does not use crank angle**

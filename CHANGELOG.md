@@ -46,6 +46,7 @@
 <!-- AUTO-CHANGELOG-END -->
 ## Manual Entries
 3.19 - 2026-02-10 - Manual notes
+  - 3.19.42 - Added bar-value annotations (including comparison bars), adaptive significant-digit rounding, and long-label spacing/font adjustments for bar charts.
   - 3.19.41 - Implemented auto-populated changelog from git.
 3.20 - 2026-02-10 - Manual notes
   - 3.20.42 - 2026-02-10 - Added report snapshots with annotations and HTML/PDF export.

@@ -1792,7 +1792,14 @@ class DashboardDataPlotter(tk.Tk):
 
         self.status.set("Added snapshot to report.")
 
-    def _build_report_html(self, report: dict, asset_prefix: str, pdf_mode: bool) -> str:
+    def _build_report_html(
+        self,
+        report: dict,
+        asset_prefix: str,
+        pdf_mode: bool,
+        embed_assets: bool = False,
+        asset_root: str = "",
+    ) -> str:
         title = html.escape(str(report.get("title", "Report")))
         project_title = html.escape(str(report.get("project_title", "")))
         created_at = html.escape(str(report.get("created_at", "")))
@@ -1869,15 +1876,36 @@ class DashboardDataPlotter(tk.Tk):
                 img_rel = assets.get("image")
                 html_rel = assets.get("html")
                 if img_rel:
-                    img_path = html.escape(os.path.join(
-                        asset_prefix, img_rel).replace("\\", "/"))
-                    lines.append(
-                        f"<img class=\"plot-img\" src=\"{img_path}\" alt=\"Plot snapshot\" />")
+                    if embed_assets and asset_root:
+                        img_path = os.path.join(asset_root, img_rel)
+                        data_uri = self._load_asset_data_uri(img_path)
+                        if data_uri:
+                            lines.append(
+                                f"<img class=\"plot-img\" src=\"{data_uri}\" alt=\"Plot snapshot\" />")
+                        else:
+                            lines.append(
+                                "<p><em>Image snapshot missing.</em></p>")
+                    else:
+                        img_path = html.escape(os.path.join(
+                            asset_prefix, img_rel).replace("\\", "/"))
+                        lines.append(
+                            f"<img class=\"plot-img\" src=\"{img_path}\" alt=\"Plot snapshot\" />")
                 elif html_rel and not pdf_mode:
-                    html_path = html.escape(os.path.join(
-                        asset_prefix, html_rel).replace("\\", "/"))
-                    lines.append(
-                        f"<iframe class=\"plot-frame\" src=\"{html_path}\"></iframe>")
+                    if embed_assets and asset_root:
+                        html_path = os.path.join(asset_root, html_rel)
+                        html_doc = self._read_asset_text(html_path)
+                        if html_doc:
+                            srcdoc = html.escape(html_doc)
+                            lines.append(
+                                f"<iframe class=\"plot-frame\" srcdoc=\"{srcdoc}\"></iframe>")
+                        else:
+                            lines.append(
+                                "<p><em>Interactive plot missing.</em></p>")
+                    else:
+                        html_path = html.escape(os.path.join(
+                            asset_prefix, html_rel).replace("\\", "/"))
+                        lines.append(
+                            f"<iframe class=\"plot-frame\" src=\"{html_path}\"></iframe>")
                 elif html_rel and pdf_mode:
                     lines.append(
                         "<p><em>Interactive plot available in HTML export.</em></p>")
@@ -1915,6 +1943,33 @@ class DashboardDataPlotter(tk.Tk):
         lines.append("</div>")
         lines.append("</body></html>")
         return "\n".join(lines)
+
+    def _load_asset_data_uri(self, path: str) -> str:
+        if not os.path.isfile(path):
+            return ""
+        ext = os.path.splitext(path)[1].lower()
+        mime = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".bmp": "image/bmp",
+        }.get(ext, "application/octet-stream")
+        try:
+            with open(path, "rb") as handle:
+                data = base64.b64encode(handle.read()).decode("ascii")
+        except OSError:
+            return ""
+        return f"data:{mime};base64,{data}"
+
+    def _read_asset_text(self, path: str) -> str:
+        if not os.path.isfile(path):
+            return ""
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return handle.read()
+        except OSError:
+            return ""
 
     def _render_markdown_html(self, text: str) -> str:
         if not text:
@@ -1974,34 +2029,14 @@ class DashboardDataPlotter(tk.Tk):
         if not out_path:
             return
 
-        export_assets_dir = os.path.splitext(out_path)[0] + "_assets"
-        os.makedirs(export_assets_dir, exist_ok=True)
-
-        copy_errors = []
         report_assets = self._current_report_assets_dir()
-        for snap in self.report_state.get("snapshots", []):
-            assets = snap.get("assets", {})
-            if not isinstance(assets, dict):
-                continue
-            for key in ("image", "html"):
-                rel_path = assets.get(key)
-                if not rel_path:
-                    continue
-                src_path = os.path.join(report_assets, rel_path)
-                dst_path = os.path.join(export_assets_dir, rel_path)
-                if os.path.isfile(src_path):
-                    try:
-                        shutil.copy2(src_path, dst_path)
-                    except PermissionError:
-                        copy_errors.append(
-                            f"Asset in use, could not copy: {rel_path}")
-                    except OSError as exc:
-                        copy_errors.append(
-                            f"Failed to copy {rel_path}: {exc}")
-
-        asset_prefix = os.path.basename(export_assets_dir)
         html_text = self._build_report_html(
-            self.report_state, asset_prefix, pdf_mode=False)
+            self.report_state,
+            "",
+            pdf_mode=False,
+            embed_assets=True,
+            asset_root=report_assets,
+        )
         try:
             with open(out_path, "w", encoding="utf-8") as handle:
                 handle.write(html_text)
@@ -2009,13 +2044,6 @@ class DashboardDataPlotter(tk.Tk):
             messagebox.showerror("Report", f"Failed to export HTML:\n{exc}")
             return
         self.status.set(f"Exported report HTML: {out_path}")
-        if copy_errors:
-            messagebox.showwarning(
-                "Report export",
-                "Report HTML saved, but some assets could not be copied.\n\n"
-                + "\n".join(copy_errors)
-                + "\n\nClose any open preview tabs and export again to copy all assets.",
-            )
 
     def export_report_pdf(self) -> None:
         if not self.report_state:

@@ -74,7 +74,8 @@ import csv
 import re
 import tempfile
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, filedialog, messagebox, colorchooser, simpledialog
+import tkinter.font as tkfont
 import webbrowser
 import subprocess
 
@@ -214,6 +215,8 @@ class DashboardDataPlotter(tk.Tk):
         self.annotation_mode_var = tk.BooleanVar(value=False)
         self._annotations = []
         self._annotation_artists = []
+        self._annotation_format = self._default_annotation_format()
+        self._load_annotation_format_from_project_options()
 
         self._init_styles()
         self._build_ui()
@@ -1049,12 +1052,15 @@ class DashboardDataPlotter(tk.Tk):
         self.btn_clear_annotations = ttk.Button(
             report_btns2, text="Clear annotations", command=self.clear_annotations)
         self.btn_clear_annotations.grid(row=0, column=2, padx=(6, 0))
+        self.btn_annotation_format = ttk.Button(
+            report_btns2, text="Format…", command=self.configure_annotation_format)
+        self.btn_annotation_format.grid(row=0, column=3, padx=(6, 0))
         self.btn_export_report_html = ttk.Button(
             report_btns2, text="Export HTML...", command=self.export_report_html, width=12)
-        self.btn_export_report_html.grid(row=0, column=3, padx=(6, 0))
+        self.btn_export_report_html.grid(row=0, column=4, padx=(6, 0))
         self.btn_export_report_pdf = ttk.Button(
             report_btns2, text="Export PDF...", command=self.export_report_pdf, width=12)
-        self.btn_export_report_pdf.grid(row=0, column=4, padx=(6, 0))
+        self.btn_export_report_pdf.grid(row=0, column=5, padx=(6, 0))
 
         ttk.Label(left, textvariable=self.status, wraplength=380, foreground="#333").grid(
             row=21, column=0, sticky="w", pady=(10, 0))
@@ -1330,6 +1336,8 @@ class DashboardDataPlotter(tk.Tk):
             (self.chk_annotate, "Enable click-to-add text annotations on the plot."),
             (self.btn_clear_annotations,
              "Remove all annotations from the current plot."),
+            (self.btn_annotation_format,
+             "Set default text and arrow formatting for new annotations."),
         ]
         for widget, text in tips:
             ToolTip(widget, text)
@@ -1378,6 +1386,182 @@ class DashboardDataPlotter(tk.Tk):
         if not values:
             return np.array([])
         return np.concatenate(values)
+
+    def _default_annotation_format(self) -> dict[str, object]:
+        return {
+            "font_family": "Segoe UI",
+            "font_size": 9,
+            "bold": False,
+            "italic": False,
+            "text_color": "#111111",
+            "arrow_color": "#333333",
+            "offset_x": 8,
+            "offset_y": 8,
+        }
+
+    def _normalize_annotation_format(self, obj) -> dict[str, object]:
+        fmt = dict(self._default_annotation_format())
+        if not isinstance(obj, dict):
+            return fmt
+
+        font_family = str(obj.get("font_family") or "").strip()
+        if font_family:
+            fmt["font_family"] = font_family
+
+        try:
+            font_size = int(obj.get("font_size"))
+            if font_size >= 6:
+                fmt["font_size"] = min(font_size, 72)
+        except Exception:
+            pass
+
+        fmt["bold"] = bool(obj.get("bold"))
+        fmt["italic"] = bool(obj.get("italic"))
+
+        for key in ["text_color", "arrow_color"]:
+            color = str(obj.get(key) or "").strip()
+            if color:
+                fmt[key] = color
+
+        for key in ["offset_x", "offset_y"]:
+            try:
+                value = int(obj.get(key))
+                fmt[key] = max(-150, min(150, value))
+            except Exception:
+                pass
+        return fmt
+
+    def _annotation_font_weight(self, fmt: dict[str, object]) -> str:
+        return "bold" if bool(fmt.get("bold")) else "normal"
+
+    def _annotation_font_style(self, fmt: dict[str, object]) -> str:
+        return "italic" if bool(fmt.get("italic")) else "normal"
+
+    def _annotation_format_payload(self) -> dict[str, object]:
+        return self._normalize_annotation_format(self._annotation_format)
+
+    def _remember_annotation_format(self) -> None:
+        payload = self._annotation_format_payload()
+        self._annotation_format = dict(payload)
+        if self.report_state is not None:
+            self.report_state["annotation_format"] = dict(payload)
+            self._report_dirty = True
+        self.state.analysis_settings.report_options["annotation_format"] = json.dumps(payload)
+        self._mark_dirty()
+
+    def _load_annotation_format_from_project_options(self) -> None:
+        raw = self.state.analysis_settings.report_options.get("annotation_format", "")
+        if not raw:
+            return
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return
+        self._annotation_format = self._normalize_annotation_format(payload)
+
+    def _apply_report_annotation_format(self) -> None:
+        if not isinstance(self.report_state, dict):
+            return
+        if "annotation_format" not in self.report_state:
+            return
+        payload = self._normalize_annotation_format(self.report_state.get("annotation_format", {}))
+        self._annotation_format = dict(payload)
+        self.state.analysis_settings.report_options["annotation_format"] = json.dumps(payload)
+
+    def configure_annotation_format(self) -> None:
+        initial = self._annotation_format_payload()
+        dialog = tk.Toplevel(self)
+        dialog.title("Annotation format")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry("430x360")
+
+        container = ttk.Frame(dialog, padding=10)
+        container.pack(fill="both", expand=True)
+
+        ttk.Label(container, text="Font family:").grid(row=0, column=0, sticky="w")
+        families = sorted(set(tkfont.families(self)))
+        if not families:
+            families = [str(initial.get("font_family") or "Segoe UI")]
+        font_family_var = tk.StringVar(value=str(initial.get("font_family") or families[0]))
+        family_combo = ttk.Combobox(container, textvariable=font_family_var, values=families, state="normal")
+        family_combo.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 8))
+
+        ttk.Label(container, text="Font size:").grid(row=2, column=0, sticky="w")
+        font_size_var = tk.StringVar(value=str(initial.get("font_size", 9)))
+        ttk.Entry(container, textvariable=font_size_var, width=8).grid(row=2, column=1, sticky="w")
+
+        bold_var = tk.BooleanVar(value=bool(initial.get("bold")))
+        italic_var = tk.BooleanVar(value=bool(initial.get("italic")))
+        ttk.Checkbutton(container, text="Bold", variable=bold_var).grid(row=3, column=0, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(container, text="Italic", variable=italic_var).grid(row=3, column=1, sticky="w", pady=(8, 0))
+
+        text_color_var = tk.StringVar(value=str(initial.get("text_color") or "#111111"))
+        arrow_color_var = tk.StringVar(value=str(initial.get("arrow_color") or "#333333"))
+
+        def _pick_color(var: tk.StringVar) -> None:
+            chosen = colorchooser.askcolor(color=var.get(), parent=dialog)
+            if chosen and chosen[1]:
+                var.set(str(chosen[1]))
+
+        ttk.Label(container, text="Text colour:").grid(row=4, column=0, sticky="w", pady=(10, 0))
+        color_row1 = ttk.Frame(container)
+        color_row1.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(2, 6))
+        ttk.Entry(color_row1, textvariable=text_color_var, width=16).pack(side="left")
+        ttk.Button(color_row1, text="Choose…", command=lambda: _pick_color(text_color_var)).pack(side="left", padx=(6, 0))
+
+        ttk.Label(container, text="Arrow colour:").grid(row=6, column=0, sticky="w")
+        color_row2 = ttk.Frame(container)
+        color_row2.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(2, 8))
+        ttk.Entry(color_row2, textvariable=arrow_color_var, width=16).pack(side="left")
+        ttk.Button(color_row2, text="Choose…", command=lambda: _pick_color(arrow_color_var)).pack(side="left", padx=(6, 0))
+
+        ttk.Label(container, text="Caption offset relative to selected point (points):").grid(row=8, column=0, columnspan=2, sticky="w")
+        offset_row = ttk.Frame(container)
+        offset_row.grid(row=9, column=0, columnspan=2, sticky="w", pady=(2, 8))
+        ttk.Label(offset_row, text="X:").pack(side="left")
+        offset_x_var = tk.StringVar(value=str(initial.get("offset_x", 8)))
+        ttk.Entry(offset_row, textvariable=offset_x_var, width=7).pack(side="left", padx=(2, 10))
+        ttk.Label(offset_row, text="Y:").pack(side="left")
+        offset_y_var = tk.StringVar(value=str(initial.get("offset_y", 8)))
+        ttk.Entry(offset_row, textvariable=offset_y_var, width=7).pack(side="left", padx=(2, 0))
+
+        btns = ttk.Frame(container)
+        btns.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        result = {"ok": False}
+
+        def _confirm():
+            result["ok"] = True
+            dialog.destroy()
+
+        def _cancel():
+            dialog.destroy()
+
+        ttk.Button(btns, text="Cancel", command=_cancel).pack(side="right")
+        ttk.Button(btns, text="Apply", command=_confirm).pack(side="right", padx=(0, 6))
+
+        container.columnconfigure(0, weight=1)
+        dialog.bind("<Escape>", lambda _e: _cancel(), add=True)
+        dialog.protocol("WM_DELETE_WINDOW", _cancel)
+        family_combo.focus_set()
+        self.wait_window(dialog)
+
+        if not result["ok"]:
+            return
+
+        updated = {
+            "font_family": font_family_var.get().strip() or str(initial.get("font_family") or "Segoe UI"),
+            "font_size": font_size_var.get().strip(),
+            "bold": bool(bold_var.get()),
+            "italic": bool(italic_var.get()),
+            "text_color": text_color_var.get().strip() or str(initial.get("text_color") or "#111111"),
+            "arrow_color": arrow_color_var.get().strip() or str(initial.get("arrow_color") or "#333333"),
+            "offset_x": offset_x_var.get().strip(),
+            "offset_y": offset_y_var.get().strip(),
+        }
+        self._annotation_format = self._normalize_annotation_format(updated)
+        self._remember_annotation_format()
+        self.status.set("Updated default annotation format.")
 
     # ---------------- Annotations ----------------
     def _on_annotation_toggle(self):
@@ -1430,14 +1614,22 @@ class DashboardDataPlotter(tk.Tk):
             "Add annotation", "Annotation text:", parent=self)
         if not text:
             return
+        fmt = self._annotation_format_payload()
         annotation = self.ax.annotate(
             text,
             xy=(event.xdata, event.ydata),
-            xytext=(8, 8),
+            xytext=(int(fmt.get("offset_x", 8)), int(fmt.get("offset_y", 8))),
             textcoords="offset points",
-            arrowprops=dict(arrowstyle="->", color="#333333", linewidth=1),
-            fontsize=9,
-            color="#111111",
+            arrowprops=dict(
+                arrowstyle="->",
+                color=str(fmt.get("arrow_color") or "#333333"),
+                linewidth=1,
+            ),
+            fontsize=int(fmt.get("font_size", 9)),
+            color=str(fmt.get("text_color") or "#111111"),
+            fontname=str(fmt.get("font_family") or "Segoe UI"),
+            fontweight=self._annotation_font_weight(fmt),
+            fontstyle=self._annotation_font_style(fmt),
             bbox=dict(boxstyle="round,pad=0.2",
                       fc="white", ec="#999999", alpha=0.8),
         )
@@ -1449,6 +1641,7 @@ class DashboardDataPlotter(tk.Tk):
                 "y": float(event.ydata),
                 "coords": "data",
                 "plot_type": (self.plot_type_var.get() or "").strip().lower(),
+                "format": dict(fmt),
             }
         )
         self.canvas.draw_idle()
@@ -1467,6 +1660,9 @@ class DashboardDataPlotter(tk.Tk):
 
     def _ensure_report_state(self) -> bool:
         if self.report_state:
+            if "annotation_format" not in self.report_state:
+                self.report_state["annotation_format"] = self._annotation_format_payload()
+                self._report_dirty = True
             return True
         confirm = messagebox.askyesno(
             "Create report",
@@ -1603,6 +1799,7 @@ class DashboardDataPlotter(tk.Tk):
             self.project_path,
             self._report_data_sources(),
         )
+        self.report_state["annotation_format"] = self._annotation_format_payload()
         self.report_path = ""
         self._report_dirty = True
         self._report_temp_assets_dir = ""
@@ -1632,12 +1829,15 @@ class DashboardDataPlotter(tk.Tk):
         os.makedirs(assets_dir, exist_ok=True)
         self._report_dirty = False
         self._report_temp_assets_dir = ""
+        self._apply_report_annotation_format()
         self.status.set(f"Opened report: {in_path}")
         return True
 
     def save_report(self) -> bool:
         if not self.report_state:
             self.new_report()
+        if self.report_state is not None:
+            self.report_state["annotation_format"] = self._annotation_format_payload()
         if not self.report_state:
             return False
         if not self._ensure_report_path():
@@ -3429,6 +3629,7 @@ class DashboardDataPlotter(tk.Tk):
 
             if settings:
                 apply_project_settings(self.state, settings)
+                self._load_annotation_format_from_project_options()
                 self._sync_ui_from_state_settings()
                 self._apply_history_settings(settings)
 
@@ -3475,6 +3676,9 @@ class DashboardDataPlotter(tk.Tk):
         if not out_path:
             return False
         try:
+            self.state.analysis_settings.report_options["annotation_format"] = json.dumps(
+                self._annotation_format_payload()
+            )
             payload = build_project_payload(self.state)
             settings = payload.get(PROJECT_SETTINGS_KEY)
             if isinstance(settings, dict):

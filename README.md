@@ -21,11 +21,12 @@ and resistant to accidental semantic breakage.
 - Load **multi‑dataset JSON objects** (file‑based or pasted)
 - Paste JSON objects directly into the UI
 - Project title is stored in the project JSON and used as the default save filename
-- Save the **entire project** to JSON (prompted to include plot history)
+- Save the **entire project** to JSON (default extension `.proj.json`, prompted to include plot history)
 - Project files include a `__project_settings__` block with project title, plot/cleaning settings, dataset order, visibility, and plot history (if saved)
 - Rename datasets without changing their identity
 - Toggle dataset visibility (Show / Hide)
 - Export the currently displayed plot data to CSV
+- Open the in-app **Guide** for workflow help
 
 ### Supported JSON formats
 
@@ -115,9 +116,28 @@ When comparison mode is enabled:
   - Toolbar (zoom, pan, save image)
 
 When the **Use Plotly (interactive)** option is enabled, plots are rendered as interactive Plotly charts
-in your default web browser instead of the embedded Matplotlib canvas.
+in your default web browser instead of the embedded Matplotlib canvas. When navigating plot history,
+interactive plots are shown inline as Matplotlib previews; click Plot to reopen the interactive view.
 
 Dataset order in the **Data Sources panel defines plotting order everywhere**.
+
+---
+
+## Reports and snapshots
+
+The Tkinter app can capture **frozen snapshots** of plots (with annotations and comments) into a
+JSON report file. Snapshots are saved as static images (Matplotlib) or HTML (Plotly), so they do not
+change if datasets later change.
+
+Report workflow:
+1. Plot a chart.
+2. (Optional) Toggle **Annotate** and click the plot to add text annotations.
+3. Click **Add snapshot...** to include the plot and comments in the report.
+4. Use **Export HTML...** or **Export PDF...** to share with clients.
+
+Report files are stored as JSON (default extension `.rep.json`) and create a sibling `*_assets` folder with the snapshot files.
+PDF export uses the optional `weasyprint` dependency; if it is not installed, the app will prompt you.
+Snapshot comments accept basic Markdown (bold, italics, bullet lists).
 
 ---
 

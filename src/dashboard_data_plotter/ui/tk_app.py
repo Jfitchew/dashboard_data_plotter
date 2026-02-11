@@ -32,6 +32,12 @@ from dashboard_data_plotter.core.io import (
     build_project_payload,
     PROJECT_SETTINGS_KEY,
 )
+from dashboard_data_plotter.core.reporting import (
+    new_report_state,
+    report_assets_dir,
+    save_report as save_report_file,
+    load_report as load_report_file,
+)
 from dashboard_data_plotter.core.plotting import (
     prepare_radar_plot,
     prepare_cartesian_plot,
@@ -60,6 +66,9 @@ import os
 import sys
 import json
 import base64
+import html
+import shutil
+import uuid
 from datetime import datetime
 import csv
 import re
@@ -192,6 +201,19 @@ class DashboardDataPlotter(tk.Tk):
         self._history = []
         self._history_index = -1
         self._restoring_history = False
+
+        # Report state
+        self.report_path = ""
+        self.report_state = None
+        self._last_plotly_fig = None
+        self._last_plotly_title = ""
+        self._report_dirty = False
+        self._report_temp_assets_dir = ""
+
+        # Annotations (matplotlib only)
+        self.annotation_mode_var = tk.BooleanVar(value=False)
+        self._annotations = []
+        self._annotation_artists = []
 
         self._init_styles()
         self._build_ui()
@@ -590,6 +612,76 @@ class DashboardDataPlotter(tk.Tk):
         dialog.bind("<Escape>", lambda _e: dialog.destroy(), add=True)
         dialog.focus_set()
 
+    def _guide_repo_path(self) -> str:
+        return os.path.normpath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "..",
+                "..",
+                "..",
+                "GUIDE.md",
+            )
+        )
+
+    def _guide_packaged_path(self) -> str:
+        if getattr(sys, "_MEIPASS", None):
+            return os.path.join(sys._MEIPASS, "GUIDE.md")
+        return ""
+
+    def _open_guide(self) -> None:
+        candidate_paths = [
+            self._guide_repo_path(),
+            self._guide_packaged_path(),
+        ]
+        guide_path = ""
+        for path in candidate_paths:
+            if path and os.path.isfile(path):
+                guide_path = path
+                break
+        if not guide_path:
+            messagebox.showerror(
+                "Guide",
+                "Unable to locate GUIDE.md.",
+            )
+            return
+        try:
+            with open(guide_path, "r", encoding="utf-8") as handle:
+                guide_text = handle.read()
+        except OSError as exc:
+            messagebox.showerror(
+                "Guide", f"Failed to read guide: {exc}")
+            return
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Guide")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry("760x680")
+
+        container = ttk.Frame(dialog, padding=10)
+        container.pack(fill="both", expand=True)
+
+        text_frame = ttk.Frame(container)
+        text_frame.pack(fill="both", expand=True)
+
+        text_widget = tk.Text(text_frame, wrap="word")
+        text_widget.pack(side="left", fill="both", expand=True)
+
+        scrollbar = ttk.Scrollbar(
+            text_frame, orient="vertical", command=text_widget.yview)
+        scrollbar.pack(side="right", fill="y")
+        text_widget.configure(yscrollcommand=scrollbar.set)
+
+        self._render_markdown(text_widget, guide_text)
+
+        btn_frame = ttk.Frame(container)
+        btn_frame.pack(fill="x", pady=(10, 0))
+        ttk.Button(btn_frame, text="Close",
+                   command=dialog.destroy).pack(side="right")
+
+        dialog.bind("<Escape>", lambda _e: dialog.destroy(), add=True)
+        dialog.focus_set()
+
     # ---------------- UI ----------------
     def _build_ui(self):
         self.columnconfigure(0, weight=0)
@@ -610,9 +702,12 @@ class DashboardDataPlotter(tk.Tk):
         self.btn_save_project = ttk.Button(
             proj_btns, text="Save project...", command=self.save_project, width=12)
         self.btn_save_project.grid(row=0, column=2, padx=(6, 0))
+        self.btn_guide = ttk.Button(
+            proj_btns, text="Guide", command=self._open_guide, width=10)
+        self.btn_guide.grid(row=0, column=3, sticky="e", padx=(30, 0))
         self.btn_change_log = ttk.Button(
             proj_btns, text="Change log", command=self._open_changelog, width=12)
-        self.btn_change_log.grid(row=0, column=3, sticky="e", padx=(140, 0))
+        self.btn_change_log.grid(row=0, column=4, sticky="e", padx=(0, 0))
 
         data_btns = ttk.Frame(left)
         data_btns.grid(row=2, column=0, sticky="ew", pady=(0, 0))
@@ -854,40 +949,38 @@ class DashboardDataPlotter(tk.Tk):
         ttk.Separator(left).grid(row=12, column=0, sticky="ew", pady=6)
 
         # Value mode
-        ttk.Label(left, text="Value mode", font=("Segoe UI", 11, "bold")).grid(
-            row=13, column=0, sticky="w")
-
-        vm_frame = ttk.Frame(left)
-        vm_frame.grid(row=14, column=0, sticky="ew", pady=(6, 2))
+        vm_row = ttk.Frame(left)
+        vm_row.grid(row=13, column=0, sticky="ew")
+        ttk.Label(vm_row, text="Value mode", font=("Segoe UI", 11, "bold")).grid(
+            row=0, column=0, sticky="w")
         self.rb_absolute = ttk.Radiobutton(
-            vm_frame, text="Absolute metric values", variable=self.value_mode_var,
+            vm_row, text="Absolute metric values", variable=self.value_mode_var,
             value="absolute")
-        self.rb_absolute.grid(row=0, column=0, sticky="w")
+        self.rb_absolute.grid(row=0, column=1, sticky="w", padx=(12, 0))
         self.rb_percent_mean = ttk.Radiobutton(
-            vm_frame, text="% of dataset mean", variable=self.value_mode_var, value="percent_mean")
-        self.rb_percent_mean.grid(row=0, column=1, sticky="w", padx=(20, 0))
+            vm_row, text="% of dataset mean", variable=self.value_mode_var, value="percent_mean")
+        self.rb_percent_mean.grid(row=0, column=2, sticky="w", padx=(20, 0))
 
-        ttk.Separator(left).grid(row=15, column=0, sticky="ew", pady=6)
+        ttk.Separator(left).grid(row=14, column=0, sticky="ew", pady=6)
 
         # Comparison mode
-        ttk.Label(left, text="Comparison mode", font=(
-            "Segoe UI", 11, "bold")).grid(row=16, column=0, sticky="w")
-
+        comp_row = ttk.Frame(left)
+        comp_row.grid(row=15, column=0, sticky="ew")
+        ttk.Label(comp_row, text="Comparison", font=(
+            "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
         self.chk_compare = ttk.Checkbutton(
-            left, text="Plot as difference vs Baseline:", variable=self.compare_var,
+            comp_row, text="Difference vs Baseline:", variable=self.compare_var,
             command=self._on_compare_toggle)
-        self.chk_compare.grid(row=17, column=0, sticky="w", pady=(6, 2))
+        self.chk_compare.grid(row=0, column=1, sticky="w", padx=(12, 0))
+        self.baseline_combo = ttk.Combobox(
+            comp_row, textvariable=self.baseline_display_var,
+            values=[], state="readonly", width=30)
+        self.baseline_combo.grid(row=0, column=2, sticky="w", padx=(8, 0))
 
-        base_frame = ttk.Frame(left)
-        base_frame.grid(row=17, column=0, sticky="e", padx=(0, 65))
-        self.baseline_combo = ttk.Combobox(base_frame, textvariable=self.baseline_display_var,
-                                           values=[], state="readonly", width=30)
-        self.baseline_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
-
-        ttk.Separator(left).grid(row=18, column=0, sticky="ew", pady=6)
+        ttk.Separator(left).grid(row=16, column=0, sticky="ew", pady=6)
 
         plot_btns = ttk.Frame(left)
-        plot_btns.grid(row=19, column=0, sticky="ew", pady=(10, 0))
+        plot_btns.grid(row=17, column=0, sticky="ew", pady=(10, 0))
         plot_btns.columnconfigure(0, weight=1)
         self.plot_btn = ttk.Button(
             plot_btns, text="Plot / Refresh", command=self.plot)
@@ -904,22 +997,67 @@ class DashboardDataPlotter(tk.Tk):
         self.delete_btn.grid(row=0, column=3, padx=(2, 0))
         self.next_btn = ttk.Button(
             plot_btns, text="Next", command=self._plot_next, state="disabled", width=5)
-        self.next_btn.grid(row=0, column=3, padx=(2, 0))
+        self.next_btn.grid(row=0, column=4, padx=(2, 0))
         self.clear_history_btn = ttk.Button(
             plot_btns, text="Clear", command=self._clear_history, state="disabled", width=6)
-        self.clear_history_btn.grid(row=0, column=4, padx=(6, 0))
+        self.clear_history_btn.grid(row=0, column=5, padx=(6, 0))
         self.history_label_var = tk.StringVar(value="History 0/0")
         self.history_label = ttk.Label(
             plot_btns, textvariable=self.history_label_var)
-        self.history_label.grid(row=0, column=5, padx=(8, 0))
+        self.history_label.grid(row=0, column=6, padx=(8, 0))
 
         style = ttk.Style()
-        style.configure("Red.TButton", background="red", foreground="black")
+        style.configure(
+            "Red.TButton",
+            background="red",
+            foreground="black",
+            font=("Segoe UI", 10, "bold"),
+            padding=(8, 4),
+        )
 
         self.status = tk.StringVar(
             value="Load one or more JSON files, or paste a dataset object, to begin.")
+        ttk.Separator(left).grid(row=18, column=0, sticky="ew", pady=6)
+        report_header = ttk.Frame(left)
+        report_header.grid(row=19, column=0, sticky="ew")
+        ttk.Label(report_header, text="Report", font=(
+            "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+        report_btns = ttk.Frame(report_header)
+        report_btns.grid(row=0, column=1, sticky="e", padx=(12, 0))
+        self.btn_new_report = ttk.Button(
+            report_btns, text="New report...", command=self.new_report, width=12)
+        self.btn_new_report.grid(row=0, column=0, sticky="w")
+        self.btn_open_report = ttk.Button(
+            report_btns, text="Open report...", command=self.open_report, width=12)
+        self.btn_open_report.grid(row=0, column=1, padx=(6, 0))
+        self.btn_view_report = ttk.Button(
+            report_btns, text="Preview report", command=self.view_report, width=13)
+        self.btn_view_report.grid(row=0, column=2, padx=(6, 0))
+        self.btn_save_report = ttk.Button(
+            report_btns, text="Save report", command=self.save_report, width=12)
+        self.btn_save_report.grid(row=0, column=3, padx=(6, 0))
+
+        report_btns2 = ttk.Frame(left)
+        report_btns2.grid(row=20, column=0, sticky="ew", pady=(6, 0))
+        self.btn_add_snapshot = ttk.Button(
+            report_btns2, text="Add snapshot...", command=self.add_report_snapshot, width=14)
+        self.btn_add_snapshot.grid(row=0, column=0, sticky="w")
+        self.chk_annotate = ttk.Checkbutton(
+            report_btns2, text="Annotate", variable=self.annotation_mode_var,
+            command=self._on_annotation_toggle)
+        self.chk_annotate.grid(row=0, column=1, padx=(10, 0))
+        self.btn_clear_annotations = ttk.Button(
+            report_btns2, text="Clear annotations", command=self.clear_annotations)
+        self.btn_clear_annotations.grid(row=0, column=2, padx=(6, 0))
+        self.btn_export_report_html = ttk.Button(
+            report_btns2, text="Export HTML...", command=self.export_report_html, width=12)
+        self.btn_export_report_html.grid(row=0, column=3, padx=(6, 0))
+        self.btn_export_report_pdf = ttk.Button(
+            report_btns2, text="Export PDF...", command=self.export_report_pdf, width=12)
+        self.btn_export_report_pdf.grid(row=0, column=4, padx=(6, 0))
+
         ttk.Label(left, textvariable=self.status, wraplength=380, foreground="#333").grid(
-            row=20, column=0, sticky="w", pady=(10, 0))
+            row=21, column=0, sticky="w", pady=(10, 0))
 
         self._on_plot_type_change()
         self._set_compare_controls_state()
@@ -1098,6 +1236,7 @@ class DashboardDataPlotter(tk.Tk):
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=right)
         self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
+        self.canvas.mpl_connect("button_press_event", self._on_plot_click)
 
         toolbar = NavigationToolbar2Tk(self.canvas, right, pack_toolbar=False)
         toolbar.update()
@@ -1111,6 +1250,7 @@ class DashboardDataPlotter(tk.Tk):
             (self.btn_load_project, "Load a saved project JSON file."),
             (self.btn_save_project,
              "Save the current project to a JSON file (optionally include plot history)."),
+            (self.btn_guide, "Open the in-app workflow guide."),
             (self.btn_add_files, "Add one or more data files to this project."),
             (self.btn_remove, "Remove the selected dataset(s) from the list."),
             (self.btn_rename, "Rename the selected dataset."),
@@ -1152,7 +1292,7 @@ class DashboardDataPlotter(tk.Tk):
             (self.outlier_show_chk,
              "Show detected outlier points on the plot."),
             (self.outlier_warnings_chk,
-             "When unticked, warnings about likely outliers in plotted data are hidden."),
+             "When ticked, warnings are shown about likely outliers in plotted data."),
             (self.range_low_entry,
              "Lower y-axis bound for the plot area (used when Fixed is on).\n"
              "Does not change or filter the data."),
@@ -1177,6 +1317,19 @@ class DashboardDataPlotter(tk.Tk):
             (self.next_btn, "Go to the next plot in history."),
             (self.clear_history_btn, "Clear all plot history entries."),
             (self.history_label, "Current position within the plot history."),
+            (self.btn_new_report, "Create a new report file for plot snapshots."),
+            (self.btn_open_report, "Open an existing report JSON file."),
+            (self.btn_view_report, "Preview the current report in your browser."),
+            (self.btn_save_report, "Save the current report JSON file."),
+            (self.btn_export_report_html,
+             "Export the report to a shareable HTML file."),
+            (self.btn_export_report_pdf,
+             "Export the report to a PDF (requires weasyprint)."),
+            (self.btn_add_snapshot,
+             "Add the current plot (with annotations) to the report."),
+            (self.chk_annotate, "Enable click-to-add text annotations on the plot."),
+            (self.btn_clear_annotations,
+             "Remove all annotations from the current plot."),
         ]
         for widget, text in tips:
             ToolTip(widget, text)
@@ -1189,6 +1342,763 @@ class DashboardDataPlotter(tk.Tk):
         self.ax.grid(True)
         # self.ax.set_position([0.05, 0.08, 0.8, 0.8])
         self.canvas.draw_idle()
+
+    def _warn_fixed_range_no_data(self, values, fixed_range, context: str) -> None:
+        if not fixed_range:
+            return
+        try:
+            arr = np.asarray(values, dtype=float)
+        except Exception:
+            return
+        if arr.size == 0:
+            return
+        finite = arr[np.isfinite(arr)]
+        if finite.size == 0:
+            return
+        low, high = fixed_range
+        if finite.max() < low or finite.min() > high:
+            messagebox.showwarning(
+                "Fixed range hides data",
+                f"All {context} values are outside the fixed range [{low}, {high}].\n\n"
+                "Clear Fixed range or adjust the bounds to see the plot.",
+            )
+
+    def _collect_trace_values(self, traces, offset: float = 0.0, skip_baseline: bool = False):
+        values = []
+        for trace in traces:
+            if skip_baseline and getattr(trace, "is_baseline", False):
+                continue
+            try:
+                vals = np.asarray(trace.y, dtype=float)
+            except Exception:
+                continue
+            if offset:
+                vals = vals - offset
+            values.append(vals)
+        if not values:
+            return np.array([])
+        return np.concatenate(values)
+
+    # ---------------- Annotations ----------------
+    def _on_annotation_toggle(self):
+        if self.annotation_mode_var.get() and self.use_plotly_var.get():
+            self.annotation_mode_var.set(False)
+            messagebox.showinfo(
+                "Annotations unavailable",
+                "Annotations are only supported on the embedded Matplotlib plot.\n\n"
+                "Turn off Plotly (Interactive) to annotate.",
+            )
+            return
+        if self.annotation_mode_var.get():
+            self.status.set(
+                "Annotation mode on: click the plot to add a label.")
+        else:
+            self.status.set("Annotation mode off.")
+
+    def _reset_annotations(self, redraw: bool = True) -> None:
+        for artist in list(self._annotation_artists):
+            try:
+                artist.remove()
+            except Exception:
+                pass
+        self._annotation_artists.clear()
+        self._annotations.clear()
+        if redraw:
+            self.canvas.draw_idle()
+
+    def clear_annotations(self):
+        if not self._annotations:
+            return
+        confirm = messagebox.askyesno(
+            "Clear annotations",
+            "Remove all annotations from the current plot?",
+        )
+        if not confirm:
+            return
+        self._reset_annotations()
+
+    def _on_plot_click(self, event):
+        if not self.annotation_mode_var.get():
+            return
+        if self.use_plotly_var.get():
+            return
+        if event.inaxes != self.ax:
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        text = simpledialog.askstring(
+            "Add annotation", "Annotation text:", parent=self)
+        if not text:
+            return
+        annotation = self.ax.annotate(
+            text,
+            xy=(event.xdata, event.ydata),
+            xytext=(8, 8),
+            textcoords="offset points",
+            arrowprops=dict(arrowstyle="->", color="#333333", linewidth=1),
+            fontsize=9,
+            color="#111111",
+            bbox=dict(boxstyle="round,pad=0.2",
+                      fc="white", ec="#999999", alpha=0.8),
+        )
+        self._annotation_artists.append(annotation)
+        self._annotations.append(
+            {
+                "text": text,
+                "x": float(event.xdata),
+                "y": float(event.ydata),
+                "coords": "data",
+                "plot_type": (self.plot_type_var.get() or "").strip().lower(),
+            }
+        )
+        self.canvas.draw_idle()
+
+    # ---------------- Report helpers ----------------
+    def _report_data_sources(self) -> list[dict[str, str]]:
+        sources = []
+        for sid in ordered_source_ids(self.state):
+            sources.append(
+                {
+                    "source_id": sid,
+                    "display": self.state.id_to_display.get(sid, sid),
+                }
+            )
+        return sources
+
+    def _ensure_report_state(self) -> bool:
+        if self.report_state:
+            return True
+        confirm = messagebox.askyesno(
+            "Create report",
+            "No report is open. Create a new report now?",
+        )
+        if not confirm:
+            return False
+        return self.new_report()
+
+    def _prompt_save_report_if_dirty(self, action_label: str) -> bool:
+        if not self.report_state or not self._report_dirty:
+            return True
+        choice = messagebox.askyesnocancel(
+            "Unsaved report",
+            f"The current report has unsaved changes.\n\nSave before {action_label}?",
+        )
+        if choice is None:
+            return False
+        if choice:
+            return self.save_report()
+        return True
+
+    def _prompt_report_save_path(self) -> str:
+        if not self._ensure_project_title():
+            return ""
+        default_name = f"{self._sanitize_filename(self.project_title)}.rep.json"
+        initial_dir = os.path.dirname(
+            self.report_path) if self.report_path else ""
+        initial_name = os.path.basename(
+            self.report_path) if self.report_path else default_name
+        out_path = filedialog.asksaveasfilename(
+            title="Save report",
+            defaultextension=".rep.json",
+            initialdir=initial_dir or None,
+            initialfile=initial_name,
+            filetypes=[("Report (.rep.json)", ("*.rep.json",)),
+                       ("JSON", ("*.json",)),
+                       ("All files", ("*.*",))],
+        )
+        return out_path or ""
+
+    def _current_report_assets_dir(self) -> str:
+        if self.report_path:
+            assets_dir = report_assets_dir(self.report_path)
+            os.makedirs(assets_dir, exist_ok=True)
+            return assets_dir
+        if not self._report_temp_assets_dir:
+            base_dir = os.path.join(
+                os.path.expanduser("~"),
+                ".dashboard_data_plotter",
+                "reports",
+            )
+            os.makedirs(base_dir, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self._report_temp_assets_dir = os.path.join(
+                base_dir, f"unsaved_{stamp}_{uuid.uuid4().hex[:6]}"
+            )
+            os.makedirs(self._report_temp_assets_dir, exist_ok=True)
+        return self._report_temp_assets_dir
+
+    def _ensure_report_path(self) -> bool:
+        out_path = self._prompt_report_save_path()
+        if not out_path:
+            return False
+        prior_path = self.report_path
+        self.report_path = out_path
+        assets_dir = report_assets_dir(out_path)
+        os.makedirs(assets_dir, exist_ok=True)
+        if prior_path and prior_path != out_path:
+            old_assets = report_assets_dir(prior_path)
+        else:
+            old_assets = self._report_temp_assets_dir
+        if old_assets and os.path.isdir(old_assets):
+            for name in os.listdir(old_assets):
+                src_path = os.path.join(old_assets, name)
+                dst_path = os.path.join(assets_dir, name)
+                if os.path.isfile(src_path):
+                    shutil.copy2(src_path, dst_path)
+        return True
+
+    def new_report(self) -> bool:
+        if not self._prompt_save_report_if_dirty("creating a new report"):
+            return False
+        dialog = tk.Toplevel(self)
+        dialog.title("New report")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry("520x220")
+
+        container = ttk.Frame(dialog, padding=10)
+        container.pack(fill="both", expand=True)
+
+        ttk.Label(container, text="Project title:").pack(anchor="w")
+        title_var = tk.StringVar(
+            value=self.project_title or "Untitled Project")
+        title_entry = ttk.Entry(container, textvariable=title_var)
+        title_entry.pack(fill="x", pady=(2, 8))
+
+        ttk.Label(
+            container,
+            text="New report prepared. Please add your plot snapshots and comments.",
+            wraplength=480,
+            foreground="#444",
+        ).pack(anchor="w", pady=(0, 12))
+
+        btns = ttk.Frame(container)
+        btns.pack(fill="x", pady=(6, 0))
+        result = {"ok": False}
+
+        def _confirm():
+            result["ok"] = True
+            dialog.destroy()
+
+        def _cancel():
+            dialog.destroy()
+
+        ttk.Button(btns, text="Cancel", command=_cancel).pack(side="right")
+        ttk.Button(btns, text="Create report", command=_confirm).pack(
+            side="right", padx=(0, 6))
+
+        dialog.bind("<Escape>", lambda _e: _cancel(), add=True)
+        dialog.protocol("WM_DELETE_WINDOW", _cancel)
+        title_entry.focus_set()
+        self.wait_window(dialog)
+
+        if not result["ok"]:
+            return False
+
+        title = title_var.get().strip() or "Untitled Project"
+        self.project_title = title
+        self._update_title_bar()
+        self.report_state = new_report_state(
+            self.project_title,
+            self.project_path,
+            self._report_data_sources(),
+        )
+        self.report_path = ""
+        self._report_dirty = True
+        self._report_temp_assets_dir = ""
+        self.status.set("New report prepared. Add snapshots and comments.")
+        return True
+
+    def open_report(self) -> bool:
+        if not self._prompt_save_report_if_dirty("opening another report"):
+            return False
+        in_path = filedialog.askopenfilename(
+            title="Open report",
+            filetypes=[("Report (.rep.json)", ("*.rep.json",)),
+                       ("JSON", ("*.json",)),
+                       ("All files", ("*.*",))],
+        )
+        if not in_path:
+            return False
+        try:
+            self.report_state = load_report_file(in_path)
+            if not isinstance(self.report_state, dict):
+                raise ValueError("Invalid report file.")
+        except Exception as exc:
+            messagebox.showerror("Report", f"Failed to open report:\n{exc}")
+            return False
+        self.report_path = in_path
+        assets_dir = report_assets_dir(in_path)
+        os.makedirs(assets_dir, exist_ok=True)
+        self._report_dirty = False
+        self._report_temp_assets_dir = ""
+        self.status.set(f"Opened report: {in_path}")
+        return True
+
+    def save_report(self) -> bool:
+        if not self.report_state:
+            self.new_report()
+        if not self.report_state:
+            return False
+        if not self._ensure_report_path():
+            return False
+        try:
+            save_report_file(self.report_state, self.report_path)
+        except Exception as exc:
+            messagebox.showerror("Report", f"Failed to save report:\n{exc}")
+            return False
+        self._report_dirty = False
+        self.status.set(f"Saved report: {self.report_path}")
+        return True
+
+    def _prompt_report_snapshot(self) -> tuple[str, str] | None:
+        dialog = tk.Toplevel(self)
+        dialog.title("Add report snapshot")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry("520x360")
+
+        container = ttk.Frame(dialog, padding=10)
+        container.pack(fill="both", expand=True)
+
+        ttk.Label(container, text="Snapshot title:").pack(anchor="w")
+        default_title = ""
+        if self.use_plotly_var.get() and self._last_plotly_title:
+            default_title = self._last_plotly_title
+        elif hasattr(self, "ax"):
+            default_title = self.ax.get_title()
+        title_var = tk.StringVar(value=default_title)
+        title_entry = ttk.Entry(container, textvariable=title_var)
+        title_entry.pack(fill="x", pady=(2, 10))
+
+        ttk.Label(container, text="Comments:").pack(anchor="w")
+        text_widget = tk.Text(container, height=10, wrap="word")
+        text_widget.pack(fill="both", expand=True)
+
+        btns = ttk.Frame(container)
+        btns.pack(fill="x", pady=(10, 0))
+        result = {"ok": False, "title": "", "comments": ""}
+
+        def _confirm():
+            result["ok"] = True
+            result["title"] = title_var.get().strip()
+            result["comments"] = text_widget.get("1.0", "end").strip()
+            dialog.destroy()
+
+        def _cancel():
+            dialog.destroy()
+
+        ttk.Button(btns, text="Cancel", command=_cancel).pack(side="right")
+        ttk.Button(btns, text="Add snapshot", command=_confirm).pack(
+            side="right", padx=(0, 6))
+
+        dialog.bind("<Escape>", lambda _e: _cancel(), add=True)
+        dialog.protocol("WM_DELETE_WINDOW", _cancel)
+        title_entry.focus_set()
+        self.wait_window(dialog)
+
+        if not result["ok"]:
+            return None
+        return result["title"], result["comments"]
+
+    def add_report_snapshot(self) -> None:
+        if not self._ensure_report_state():
+            return
+
+        if not self.state.loaded:
+            messagebox.showinfo(
+                "No data", "Load at least one dataset and plot first.")
+            return
+
+        snapshot_prompt = self._prompt_report_snapshot()
+        if snapshot_prompt is None:
+            return
+        snap_title, comments = snapshot_prompt
+
+        plot_type = (self.plot_type_var.get() or "").strip().lower()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        metric_col = (self.metric_var.get() or "").strip()
+        metric_part = self._sanitize_filename_part(metric_col)
+        plot_part = self._sanitize_filename_part(plot_type)
+
+        assets_dir = self._current_report_assets_dir()
+
+        assets = {}
+        plot_backend = "matplotlib"
+        if self.use_plotly_var.get():
+            plot_backend = "plotly"
+            if self._last_plotly_fig is None:
+                messagebox.showinfo(
+                    "No Plotly plot", "Plot a Plotly chart before adding a snapshot.")
+                return
+            html_name = f"plotly_{plot_part}_{metric_part}_{timestamp}.html"
+            html_path = os.path.join(assets_dir, html_name)
+            try:
+                pio.write_html(
+                    self._last_plotly_fig,
+                    file=html_path,
+                    auto_open=False,
+                    include_plotlyjs="cdn",
+                )
+            except Exception as exc:
+                messagebox.showerror(
+                    "Report", f"Failed to save Plotly snapshot:\n{exc}")
+                return
+            assets["html"] = html_name
+        else:
+            image_name = f"plot_{plot_part}_{metric_part}_{timestamp}.png"
+            image_path = os.path.join(assets_dir, image_name)
+            try:
+                self.fig.savefig(image_path, dpi=200, bbox_inches="tight")
+            except Exception as exc:
+                messagebox.showerror(
+                    "Report", f"Failed to save plot snapshot:\n{exc}")
+                return
+            assets["image"] = image_name
+
+        plot_title = ""
+        if self.use_plotly_var.get() and self._last_plotly_title:
+            plot_title = self._last_plotly_title
+        elif hasattr(self, "ax"):
+            plot_title = self.ax.get_title()
+
+        snapshot = {
+            "id": uuid.uuid4().hex,
+            "created_at": datetime.now().replace(microsecond=0).isoformat(),
+            "title": snap_title or plot_title,
+            "plot_type": plot_type,
+            "plot_backend": plot_backend,
+            "plot_title": plot_title,
+            "plot_settings": self._snapshot_settings(),
+            "comments": comments,
+            "annotations": list(self._annotations),
+            "assets": assets,
+        }
+
+        snapshots = self.report_state.setdefault("snapshots", [])
+        if isinstance(snapshots, list):
+            snapshots.append(snapshot)
+        else:
+            self.report_state["snapshots"] = [snapshot]
+        self._report_dirty = True
+        if self.report_path:
+            try:
+                save_report_file(self.report_state, self.report_path)
+                self._report_dirty = False
+            except Exception as exc:
+                messagebox.showerror(
+                    "Report", f"Failed to save report:\n{exc}")
+                return
+
+        self.status.set("Added snapshot to report.")
+
+    def _build_report_html(self, report: dict, asset_prefix: str, pdf_mode: bool) -> str:
+        title = html.escape(str(report.get("title", "Report")))
+        project_title = html.escape(str(report.get("project_title", "")))
+        created_at = html.escape(str(report.get("created_at", "")))
+        updated_at = html.escape(str(report.get("updated_at", "")))
+
+        data_sources = report.get("data_sources", [])
+        snapshots = report.get("snapshots", [])
+
+        css = """
+        body { font-family: "Segoe UI", Arial, sans-serif; color: #1b1b1b; margin: 24px; }
+        h1 { margin-bottom: 4px; }
+        .meta { color: #555; margin-bottom: 16px; }
+        .section { margin-top: 24px; }
+        .snapshot { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 18px; }
+        .snapshot h3 { margin-top: 0; }
+        .snapshot-body { display: flex; gap: 16px; align-items: flex-start; }
+        .snapshot-left { flex: 0 0 72%; }
+        .snapshot-right { flex: 0 0 28%; }
+        .plot-img { width: 100%; height: auto; border: 1px solid #ccc; background: #fafafa; }
+        .plot-frame { width: 100%; height: 320px; border: 1px solid #ccc; }
+        .settings { font-size: 0.9em; color: #444; }
+        .comments { font-size: 1.35em; font-weight: 700; line-height: 1.5; margin-top: 10px; color: #1f4aa8; }
+        .pill { display: inline-block; background: #f0f0f0; padding: 2px 8px; border-radius: 10px; font-size: 0.85em; }
+        @media (max-width: 900px) {
+          .snapshot-body { flex-direction: column; }
+          .snapshot-left { flex: 1 1 auto; }
+        }
+        """
+
+        lines = [
+            "<!doctype html>",
+            "<html>",
+            "<head>",
+            "<meta charset=\"utf-8\" />",
+            f"<title>{title}</title>",
+            f"<style>{css}</style>",
+            "</head>",
+            "<body>",
+            f"<h1>{title}</h1>",
+            f"<div class=\"meta\">Project: <strong>{project_title}</strong></div>",
+            f"<div class=\"meta\">Created: {created_at} | Updated: {updated_at}</div>",
+        ]
+
+        if data_sources:
+            lines.append("<div class=\"section\"><h2>Data Sources</h2><ul>")
+            for item in data_sources:
+                display = html.escape(str(item.get("display", "")))
+                raw_source_id = str(item.get("source_id", ""))
+                source_id = html.escape(
+                    raw_source_id.replace("PASTE", "Originally"))
+                lines.append(
+                    f"<li>{display} <span class=\"pill\">{source_id}</span></li>")
+            lines.append("</ul></div>")
+
+        lines.append("<div class=\"section\"><h2>Snapshots</h2>")
+        if not snapshots:
+            lines.append("<p>No snapshots yet.</p>")
+        else:
+            for snap in snapshots:
+                snap_title = html.escape(str(snap.get("title", "Snapshot")))
+                snap_time = html.escape(str(snap.get("created_at", "")))
+                snap_date = snap_time.split("T", 1)[0] if snap_time else ""
+                comments = str(snap.get("comments", ""))
+                assets = snap.get("assets", {}) if isinstance(
+                    snap.get("assets", {}), dict) else {}
+
+                lines.append("<div class=\"snapshot\">")
+                lines.append(f"<h3>{snap_title}</h3>")
+                lines.append(
+                    f"<div class=\"meta\">Captured: {snap_date}</div>")
+
+                lines.append("<div class=\"snapshot-body\">")
+                lines.append("<div class=\"snapshot-left\">")
+                img_rel = assets.get("image")
+                html_rel = assets.get("html")
+                if img_rel:
+                    img_path = html.escape(os.path.join(
+                        asset_prefix, img_rel).replace("\\", "/"))
+                    lines.append(
+                        f"<img class=\"plot-img\" src=\"{img_path}\" alt=\"Plot snapshot\" />")
+                elif html_rel and not pdf_mode:
+                    html_path = html.escape(os.path.join(
+                        asset_prefix, html_rel).replace("\\", "/"))
+                    lines.append(
+                        f"<iframe class=\"plot-frame\" src=\"{html_path}\"></iframe>")
+                elif html_rel and pdf_mode:
+                    lines.append(
+                        "<p><em>Interactive plot available in HTML export.</em></p>")
+
+                if comments:
+                    lines.append(
+                        f"<div class=\"comments\">{self._render_markdown_html(comments)}</div>")
+                lines.append("</div>")
+                lines.append("<div class=\"snapshot-right\">")
+
+                settings = snap.get("plot_settings", {})
+                if isinstance(settings, dict):
+                    lines.append(
+                        "<div class=\"settings\"><strong>Plot settings:</strong><ul>")
+                    hidden_keys = {
+                        "close_loop",
+                        "plot_type",
+                        "use_plotly",
+                        "radar_background",
+                        "show_outliers",
+                        "outlier_warnings",
+                        "use_original_binned",
+                        "show_flag",
+                    }
+                    for key, value in settings.items():
+                        if key in hidden_keys:
+                            continue
+                        lines.append(
+                            f"<li>{html.escape(str(key))}: {html.escape(str(value))}</li>")
+                    lines.append("</ul></div>")
+
+                lines.append("</div>")
+                lines.append("</div>")
+                lines.append("</div>")
+        lines.append("</div>")
+        lines.append("</body></html>")
+        return "\n".join(lines)
+
+    def _render_markdown_html(self, text: str) -> str:
+        if not text:
+            return ""
+        escaped = html.escape(text)
+        lines = escaped.splitlines()
+        out_lines = []
+        in_list = False
+
+        for line in lines:
+            if line.startswith("- "):
+                if not in_list:
+                    out_lines.append("<ul>")
+                    in_list = True
+                item = line[2:].strip()
+                out_lines.append(
+                    f"<li>{self._render_markdown_inline(item)}</li>")
+                continue
+
+            if in_list:
+                out_lines.append("</ul>")
+                in_list = False
+            out_lines.append(self._render_markdown_inline(line))
+
+        if in_list:
+            out_lines.append("</ul>")
+
+        return "<br/>".join(out_lines)
+
+    def _render_markdown_inline(self, text: str) -> str:
+        # Bold **text**
+        text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
+        # Italic *text* (avoid bold markers)
+        text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", text)
+        return text
+
+    def export_report_html(self) -> None:
+        if not self.report_state:
+            messagebox.showinfo(
+                "Export report", "Open or create a report first.")
+            return
+        base_name = ""
+        if self.report_path:
+            base_name = os.path.splitext(os.path.basename(self.report_path))[0]
+        if not base_name:
+            base_name = self._sanitize_filename(self.project_title or "report")
+        default_name = f"{base_name}.rep.html"
+        out_path = filedialog.asksaveasfilename(
+            title="Export report to HTML",
+            defaultextension=".rep.html",
+            initialfile=default_name,
+            filetypes=[("Report HTML", ("*.rep.html", "*.html")),
+                       ("All files", ("*.*",))],
+        )
+        if not out_path:
+            return
+
+        export_assets_dir = os.path.splitext(out_path)[0] + "_assets"
+        os.makedirs(export_assets_dir, exist_ok=True)
+
+        report_assets = self._current_report_assets_dir()
+        for snap in self.report_state.get("snapshots", []):
+            assets = snap.get("assets", {})
+            if not isinstance(assets, dict):
+                continue
+            for key in ("image", "html"):
+                rel_path = assets.get(key)
+                if not rel_path:
+                    continue
+                src_path = os.path.join(report_assets, rel_path)
+                dst_path = os.path.join(export_assets_dir, rel_path)
+                if os.path.isfile(src_path):
+                    shutil.copy2(src_path, dst_path)
+
+        asset_prefix = os.path.basename(export_assets_dir)
+        html_text = self._build_report_html(
+            self.report_state, asset_prefix, pdf_mode=False)
+        try:
+            with open(out_path, "w", encoding="utf-8") as handle:
+                handle.write(html_text)
+        except Exception as exc:
+            messagebox.showerror("Report", f"Failed to export HTML:\n{exc}")
+            return
+        self.status.set(f"Exported report HTML: {out_path}")
+
+    def export_report_pdf(self) -> None:
+        if not self.report_state:
+            messagebox.showinfo(
+                "Export report", "Open or create a report first.")
+            return
+        try:
+            import weasyprint  # type: ignore
+        except Exception:
+            messagebox.showerror(
+                "Export report",
+                "PDF export requires the optional package 'weasyprint'.\n\n"
+                "Install it in your environment to enable PDF export.",
+            )
+            return
+
+        base_name = ""
+        if self.report_path:
+            base_name = os.path.splitext(os.path.basename(self.report_path))[0]
+        if not base_name:
+            base_name = self._sanitize_filename(self.project_title or "report")
+        default_name = f"{base_name}.rep.pdf"
+        out_path = filedialog.asksaveasfilename(
+            title="Export report to PDF",
+            defaultextension=".rep.pdf",
+            initialfile=default_name,
+            filetypes=[("Report PDF", ("*.rep.pdf", "*.pdf")),
+                       ("All files", ("*.*",))],
+        )
+        if not out_path:
+            return
+
+        export_assets_dir = os.path.splitext(out_path)[0] + "_assets"
+        os.makedirs(export_assets_dir, exist_ok=True)
+
+        report_assets = self._current_report_assets_dir()
+        for snap in self.report_state.get("snapshots", []):
+            assets = snap.get("assets", {})
+            if not isinstance(assets, dict):
+                continue
+            rel_path = assets.get("image")
+            if not rel_path:
+                continue
+            src_path = os.path.join(report_assets, rel_path)
+            dst_path = os.path.join(export_assets_dir, rel_path)
+            if os.path.isfile(src_path):
+                shutil.copy2(src_path, dst_path)
+
+        asset_prefix = os.path.basename(export_assets_dir)
+        html_text = self._build_report_html(
+            self.report_state, asset_prefix, pdf_mode=True)
+        try:
+            base_dir = os.path.dirname(out_path)
+            weasyprint.HTML(string=html_text,
+                            base_url=base_dir).write_pdf(out_path)
+        except Exception as exc:
+            messagebox.showerror("Report", f"Failed to export PDF:\n{exc}")
+            return
+        self.status.set(f"Exported report PDF: {out_path}")
+
+    def view_report(self) -> None:
+        if not self.report_state:
+            messagebox.showinfo(
+                "View report", "Open or create a report first.")
+            return
+        try:
+            temp_dir = tempfile.mkdtemp(prefix="ddp_report_")
+        except Exception as exc:
+            messagebox.showerror(
+                "Report", f"Failed to create temp folder:\n{exc}")
+            return
+
+        export_assets_dir = os.path.join(temp_dir, "assets")
+        os.makedirs(export_assets_dir, exist_ok=True)
+
+        report_assets = self._current_report_assets_dir()
+        for snap in self.report_state.get("snapshots", []):
+            assets = snap.get("assets", {})
+            if not isinstance(assets, dict):
+                continue
+            for key in ("image", "html"):
+                rel_path = assets.get(key)
+                if not rel_path:
+                    continue
+                src_path = os.path.join(report_assets, rel_path)
+                dst_path = os.path.join(export_assets_dir, rel_path)
+                if os.path.isfile(src_path):
+                    shutil.copy2(src_path, dst_path)
+
+        html_text = self._build_report_html(
+            self.report_state, "assets", pdf_mode=False)
+        out_path = os.path.join(temp_dir, "report_preview.html")
+        try:
+            with open(out_path, "w", encoding="utf-8") as handle:
+                handle.write(html_text)
+        except Exception as exc:
+            messagebox.showerror("Report", f"Failed to create preview:\n{exc}")
+            return
+        webbrowser.open(f"file://{out_path}")
+        self.status.set("Opened report preview in browser.")
 
     # ---------------- UI state helpers ----------------
     def _set_compare_controls_state(self):
@@ -2457,7 +3367,9 @@ class DashboardDataPlotter(tk.Tk):
             return
         path = filedialog.askopenfilename(
             title="Load project",
-            filetypes=[("Project JSON", ("*.json",)), ("All files", ("*.*",))],
+            filetypes=[("Project (.proj.json)", ("*.proj.json",)),
+                       ("JSON", ("*.json",)),
+                       ("All files", ("*.*",))],
         )
         if not path:
             return
@@ -2516,13 +3428,15 @@ class DashboardDataPlotter(tk.Tk):
         )
         initial_dir = os.path.dirname(
             self.project_path) if self.project_path else ""
-        initial_name = f"{self._sanitize_filename(self.project_title)}.json"
+        initial_name = f"{self._sanitize_filename(self.project_title)}.proj.json"
         out_path = filedialog.asksaveasfilename(
             title="Save project",
-            defaultextension=".json",
+            defaultextension=".proj.json",
             initialdir=initial_dir or None,
             initialfile=initial_name,
-            filetypes=[("JSON", ("*.json",)), ("All files", ("*.*",))],
+            filetypes=[("Project (.proj.json)", ("*.proj.json",)),
+                       ("JSON", ("*.json",)),
+                       ("All files", ("*.*",))],
         )
         if not out_path:
             return False
@@ -2542,6 +3456,13 @@ class DashboardDataPlotter(tk.Tk):
             self.project_path = out_path
             self._clear_dirty()
             self.status.set(f"Saved project to: {out_path}")
+            if self.report_state and self._report_dirty:
+                save_report = messagebox.askyesno(
+                    "Save report",
+                    "Do you want to save the current report as well?",
+                )
+                if save_report:
+                    self.save_report()
             return True
         except Exception as e:
             log_exception("save_project failed")
@@ -2551,6 +3472,8 @@ class DashboardDataPlotter(tk.Tk):
 
     def _on_close(self):
         if not self._prompt_save_if_dirty("closing the application"):
+            return
+        if not self._prompt_save_report_if_dirty("closing the application"):
             return
         self.destroy()
 
@@ -2619,6 +3542,7 @@ class DashboardDataPlotter(tk.Tk):
         range_minmax = self._minmax_from_values(data.values)
         if range_minmax:
             self._update_range_entries(*range_minmax)
+        self._warn_fixed_range_no_data(data.values, fixed_range, "bar plot")
 
         mode_str = data.mode_label
         if data.compare:
@@ -2646,6 +3570,8 @@ class DashboardDataPlotter(tk.Tk):
                       y0=0, y1=0,
                       line=dict(color=baseline_color if compare else "black", width=1.8 if compare else 1.2))
 
+        self._last_plotly_fig = fig
+        self._last_plotly_title = title
         self._open_plotly_figure(fig, f"Plotted {len(data.labels)} bar(s).")
         if data.errors:
             messagebox.showwarning(
@@ -2694,6 +3620,11 @@ class DashboardDataPlotter(tk.Tk):
                 opacity=line_alpha,
             )
             range_values.append(trace.y)
+        self._warn_fixed_range_no_data(
+            self._collect_trace_values(data.traces),
+            fixed_range,
+            "time series plot",
+        )
         outlier_points = self._collect_outlier_points(
             "timeseries",
             "",
@@ -2743,6 +3674,8 @@ class DashboardDataPlotter(tk.Tk):
         if fixed_range:
             fig.update_yaxes(range=[fixed_range[0], fixed_range[1]])
 
+        self._last_plotly_fig = fig
+        self._last_plotly_title = title
         self._open_plotly_figure(fig, f"Plotted {len(data.traces)} trace(s).")
         if data.errors:
             messagebox.showwarning(
@@ -2784,6 +3717,11 @@ class DashboardDataPlotter(tk.Tk):
                 x=trace.x, y=trace.y, mode="lines+markers", name=trace.label,
                 marker=dict(size=4, color=color), line=dict(color=color, width=1.5))
             range_values.append(trace.y)
+        self._warn_fixed_range_no_data(
+            self._collect_trace_values(data.traces),
+            fixed_range,
+            "cartesian plot",
+        )
         outlier_points = self._collect_outlier_points(
             "cartesian",
             angle_col,
@@ -2825,6 +3763,8 @@ class DashboardDataPlotter(tk.Tk):
         if fixed_range:
             fig.update_yaxes(range=[fixed_range[0], fixed_range[1]])
 
+        self._last_plotly_fig = fig
+        self._last_plotly_title = title
         self._open_plotly_figure(fig, f"Plotted {len(data.traces)} trace(s).")
         if data.errors:
             messagebox.showwarning(
@@ -2869,6 +3809,12 @@ class DashboardDataPlotter(tk.Tk):
                 marker=dict(size=4, color=color),
                 line=dict(color=color, width=1.5),
             )
+        if data.compare:
+            radar_vals = self._collect_trace_values(
+                data.traces, offset=data.offset, skip_baseline=True)
+        else:
+            radar_vals = self._collect_trace_values(data.traces)
+        self._warn_fixed_range_no_data(radar_vals, fixed_range, "radar plot")
         outlier_points = self._collect_outlier_points(
             "radar",
             angle_col,
@@ -2901,6 +3847,8 @@ class DashboardDataPlotter(tk.Tk):
             fig.update_polars(radialaxis=dict(
                 range=[fixed_range[0], fixed_range[1]]))
 
+        self._last_plotly_fig = fig
+        self._last_plotly_title = title
         self._open_plotly_figure(fig, f"Plotted {len(data.traces)} trace(s).")
         if data.errors:
             messagebox.showwarning(
@@ -3110,6 +4058,12 @@ class DashboardDataPlotter(tk.Tk):
                 "No data", "Load at least one dataset first (file or paste).")
             return
 
+        self._reset_annotations(redraw=False)
+        use_plotly = self.use_plotly_var.get()
+        use_plotly_live = use_plotly and not self._restoring_history
+        if use_plotly and self.annotation_mode_var.get():
+            self.annotation_mode_var.set(False)
+
         angle_col = self.angle_var.get().strip()
         metric_col = self.metric_var.get().strip()
         if not metric_col:
@@ -3148,7 +4102,7 @@ class DashboardDataPlotter(tk.Tk):
         if fixed_range == "invalid":
             return
 
-        if self.use_plotly_var.get():
+        if use_plotly_live:
             if plot_type == "timeseries":
                 self._plot_plotly_timeseries(
                     metric_col, sentinels, value_mode, agg_mode, outlier_threshold,
@@ -3243,6 +4197,11 @@ class DashboardDataPlotter(tk.Tk):
                 )
                 range_values.append(trace.y)
                 plotted += 1
+            self._warn_fixed_range_no_data(
+                self._collect_trace_values(data.traces),
+                fixed_range,
+                "time series plot",
+            )
 
             mode_str = data.mode_label
             if agg_mode == "pedal_stroke":
@@ -3333,6 +4292,12 @@ class DashboardDataPlotter(tk.Tk):
                                     "No datasets produced valid bar values.")
                 self._redraw_empty()
                 return
+
+            self._warn_fixed_range_no_data(
+                data.values,
+                fixed_range,
+                "bar plot",
+            )
 
             x = np.arange(len(data.labels))
             # self.fig.subplots_adjust(left=0.08, right=0.98)
@@ -3438,6 +4403,11 @@ class DashboardDataPlotter(tk.Tk):
                              markersize=3, linewidth=1.5, label=trace.label, color=color)
                 range_values.append(trace.y)
                 plotted += 1
+            self._warn_fixed_range_no_data(
+                self._collect_trace_values(data.traces),
+                fixed_range,
+                "cartesian plot",
+            )
 
             baseline_label = data.baseline_label if data.compare else None
             baseline_handle = self.ax.axhline(
@@ -3558,6 +4528,12 @@ class DashboardDataPlotter(tk.Tk):
                          markersize=3, linewidth=1.5, label=trace.label, color=color)
             if not trace.is_baseline:
                 plotted += 1
+        if data.compare:
+            radar_vals = self._collect_trace_values(
+                data.traces, offset=data.offset, skip_baseline=True)
+        else:
+            radar_vals = self._collect_trace_values(data.traces)
+        self._warn_fixed_range_no_data(radar_vals, fixed_range, "radar plot")
 
         mode_str = data.mode_label
         if data.compare:

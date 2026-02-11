@@ -61,3 +61,6 @@
   - 3.20.52 - 2026-02-10 - Fixed report export dialogs and snapshot save flow.
   - 3.20.53 - 2026-02-11 - Show Matplotlib previews when navigating Plotly plot history.
   - 3.20.54 - 2026-02-11 - Restore report preview without forcing a save dialog.
+  - 3.20.55 - 2026-02-11 - Fix HTML/PDF export default filenames to avoid double .rep.
+  - 3.20.56 - 2026-02-11 - Bundle GUIDE.md and CHANGELOG.md in PyInstaller builds.
+  - 3.20.57 - 2026-02-11 - Allow report export to succeed when assets are locked; warn instead.

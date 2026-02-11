@@ -1961,6 +1961,8 @@ class DashboardDataPlotter(tk.Tk):
             base_name = os.path.splitext(os.path.basename(self.report_path))[0]
         if not base_name:
             base_name = self._sanitize_filename(self.project_title or "report")
+        if base_name.endswith(".rep"):
+            base_name = base_name[:-4]
         default_name = f"{base_name}.rep.html"
         out_path = filedialog.asksaveasfilename(
             title="Export report to HTML",
@@ -1975,6 +1977,7 @@ class DashboardDataPlotter(tk.Tk):
         export_assets_dir = os.path.splitext(out_path)[0] + "_assets"
         os.makedirs(export_assets_dir, exist_ok=True)
 
+        copy_errors = []
         report_assets = self._current_report_assets_dir()
         for snap in self.report_state.get("snapshots", []):
             assets = snap.get("assets", {})
@@ -1987,7 +1990,14 @@ class DashboardDataPlotter(tk.Tk):
                 src_path = os.path.join(report_assets, rel_path)
                 dst_path = os.path.join(export_assets_dir, rel_path)
                 if os.path.isfile(src_path):
-                    shutil.copy2(src_path, dst_path)
+                    try:
+                        shutil.copy2(src_path, dst_path)
+                    except PermissionError:
+                        copy_errors.append(
+                            f"Asset in use, could not copy: {rel_path}")
+                    except OSError as exc:
+                        copy_errors.append(
+                            f"Failed to copy {rel_path}: {exc}")
 
         asset_prefix = os.path.basename(export_assets_dir)
         html_text = self._build_report_html(
@@ -1999,6 +2009,13 @@ class DashboardDataPlotter(tk.Tk):
             messagebox.showerror("Report", f"Failed to export HTML:\n{exc}")
             return
         self.status.set(f"Exported report HTML: {out_path}")
+        if copy_errors:
+            messagebox.showwarning(
+                "Report export",
+                "Report HTML saved, but some assets could not be copied.\n\n"
+                + "\n".join(copy_errors)
+                + "\n\nClose any open preview tabs and export again to copy all assets.",
+            )
 
     def export_report_pdf(self) -> None:
         if not self.report_state:
@@ -2020,6 +2037,8 @@ class DashboardDataPlotter(tk.Tk):
             base_name = os.path.splitext(os.path.basename(self.report_path))[0]
         if not base_name:
             base_name = self._sanitize_filename(self.project_title or "report")
+        if base_name.endswith(".rep"):
+            base_name = base_name[:-4]
         default_name = f"{base_name}.rep.pdf"
         out_path = filedialog.asksaveasfilename(
             title="Export report to PDF",
@@ -2034,6 +2053,7 @@ class DashboardDataPlotter(tk.Tk):
         export_assets_dir = os.path.splitext(out_path)[0] + "_assets"
         os.makedirs(export_assets_dir, exist_ok=True)
 
+        copy_errors = []
         report_assets = self._current_report_assets_dir()
         for snap in self.report_state.get("snapshots", []):
             assets = snap.get("assets", {})
@@ -2045,7 +2065,14 @@ class DashboardDataPlotter(tk.Tk):
             src_path = os.path.join(report_assets, rel_path)
             dst_path = os.path.join(export_assets_dir, rel_path)
             if os.path.isfile(src_path):
-                shutil.copy2(src_path, dst_path)
+                try:
+                    shutil.copy2(src_path, dst_path)
+                except PermissionError:
+                    copy_errors.append(
+                        f"Asset in use, could not copy: {rel_path}")
+                except OSError as exc:
+                    copy_errors.append(
+                        f"Failed to copy {rel_path}: {exc}")
 
         asset_prefix = os.path.basename(export_assets_dir)
         html_text = self._build_report_html(
@@ -2058,6 +2085,13 @@ class DashboardDataPlotter(tk.Tk):
             messagebox.showerror("Report", f"Failed to export PDF:\n{exc}")
             return
         self.status.set(f"Exported report PDF: {out_path}")
+        if copy_errors:
+            messagebox.showwarning(
+                "Report export",
+                "Report PDF saved, but some assets could not be copied.\n\n"
+                + "\n".join(copy_errors)
+                + "\n\nClose any open preview tabs and export again to copy all assets.",
+            )
 
     def view_report(self) -> None:
         if not self.report_state:

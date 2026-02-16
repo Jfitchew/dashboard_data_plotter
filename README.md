@@ -93,16 +93,19 @@ but the app is tolerant of missing or sparse data.
 ## Comparison mode
 
 When comparison mode is enabled:
-- A **baseline dataset** is selected
+- One or more **baseline datasets** can be selected
+- The selected baselines are averaged using the current aggregation mode and value mode
 - Radar plots:
   - Baseline drawn as a **zero reference ring**
-  - Other datasets plotted as angular differences
+  - Other datasets plotted as angular differences versus the averaged baseline bins
 - Cartesian plots:
-  - Baseline provides the interpolation reference
+  - Averaged baseline provides the interpolation reference
   - Other datasets plotted as signed angular deltas with a y=0 reference line
 - Bar plots:
-  - Baseline bar fixed at **0**
-  - Other bars show ± difference relative to baseline
+  - Baseline bar(s) fixed at **0**
+  - Other bars show ± difference relative to the averaged baseline value
+- Time series plots:
+  - Each data point is compared against the averaged baseline series for the selected aggregation mode
 
 ---
 

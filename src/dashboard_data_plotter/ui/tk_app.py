@@ -14,6 +14,7 @@ from dashboard_data_plotter.core.state import (
     set_value_mode,
     set_compare,
     set_baseline,
+    set_baselines,
     set_use_original_binned,
     update_cleaning_settings,
 )
@@ -196,6 +197,7 @@ class DashboardDataPlotter(tk.Tk):
         # Comparison mode
         self.compare_var = tk.BooleanVar(value=False)
         self.baseline_display_var = tk.StringVar(value="")
+        self.baseline_multi_displays: list[str] = []
 
         # Plot history
         self._history = []
@@ -976,6 +978,9 @@ class DashboardDataPlotter(tk.Tk):
             comp_row, textvariable=self.baseline_display_var,
             values=[], state="readonly", width=30)
         self.baseline_combo.grid(row=0, column=2, sticky="w", padx=(8, 0))
+        self.baseline_multi_btn = ttk.Button(
+            comp_row, text="Select...", command=self._open_baseline_multi_select, width=9)
+        self.baseline_multi_btn.grid(row=0, column=3, sticky="w", padx=(6, 0))
 
         ttk.Separator(left).grid(row=16, column=0, sticky="ew", pady=6)
 
@@ -1089,6 +1094,14 @@ class DashboardDataPlotter(tk.Tk):
         baseline_id = self.state.display_to_id.get(baseline_display, "")
         set_baseline(
             self.state, baseline_id if baseline_id in self.state.loaded else "")
+        baseline_ids = [
+            self.state.display_to_id.get(name, "")
+            for name in self.baseline_multi_displays
+        ]
+        baseline_ids = [sid for sid in baseline_ids if sid in self.state.loaded]
+        if baseline_id and baseline_id in self.state.loaded and baseline_id not in baseline_ids:
+            baseline_ids.insert(0, baseline_id)
+        set_baselines(self.state, baseline_ids)
         set_use_original_binned(self.state, self.use_original_binned_var.get())
         sentinels = parse_sentinels(self.sentinels_var.get())
         outlier_threshold = None
@@ -1213,6 +1226,14 @@ class DashboardDataPlotter(tk.Tk):
                 plot.baseline_source_id, "")
         if baseline_display:
             self.baseline_display_var.set(baseline_display)
+
+        self.baseline_multi_displays = [
+            self.state.id_to_display.get(sid, sid)
+            for sid in plot.baseline_source_ids
+            if sid in self.state.loaded
+        ]
+        if not self.baseline_multi_displays and baseline_display:
+            self.baseline_multi_displays = [baseline_display]
 
         self._sync_treeview_from_state()
         self._on_plot_type_change()
@@ -2166,6 +2187,7 @@ class DashboardDataPlotter(tk.Tk):
     def _set_compare_controls_state(self):
         state = "readonly" if self.compare_var.get() else "disabled"
         self.baseline_combo.configure(state=state)
+        self.baseline_multi_btn.configure(state="normal" if self.compare_var.get() else "disabled")
 
     def _set_plot_type_controls_state(self):
         plot_type = (self.plot_type_var.get() or "radar").strip().lower()
@@ -2317,9 +2339,10 @@ class DashboardDataPlotter(tk.Tk):
         if plot_type in ("radar", "cartesian") and not self.angle_var.get().strip():
             return False
         if self.compare_var.get():
-            baseline_display = self.baseline_display_var.get().strip()
-            baseline_id = self.state.display_to_id.get(baseline_display, "")
-            if not baseline_id or baseline_id not in self.state.loaded:
+            baseline_names = self.baseline_multi_displays or [self.baseline_display_var.get().strip()]
+            baseline_ids = [self.state.display_to_id.get(name, "") for name in baseline_names]
+            baseline_ids = [sid for sid in baseline_ids if sid in self.state.loaded]
+            if not baseline_ids:
                 return False
         return True
 
@@ -2786,6 +2809,7 @@ class DashboardDataPlotter(tk.Tk):
             "outlier_warnings": bool(self.outlier_warnings_var.get()),
             "compare": bool(self.compare_var.get()),
             "baseline_display": self.baseline_display_var.get(),
+            "baseline_displays": list(self.baseline_multi_displays),
             "range_low": self.range_low_var.get(),
             "range_high": self.range_high_var.get(),
             "range_fixed": bool(self.range_fixed_var.get()),
@@ -2939,6 +2963,9 @@ class DashboardDataPlotter(tk.Tk):
         self.compare_var.set(bool(snap.get("compare", self.compare_var.get())))
         self.baseline_display_var.set(
             snap.get("baseline_display", self.baseline_display_var.get()))
+        raw_baselines = snap.get("baseline_displays", self.baseline_multi_displays)
+        if isinstance(raw_baselines, list):
+            self.baseline_multi_displays = [str(name) for name in raw_baselines]
         self.range_low_var.set(snap.get("range_low", self.range_low_var.get()))
         self.range_high_var.set(
             snap.get("range_high", self.range_high_var.get()))
@@ -3411,14 +3438,55 @@ class DashboardDataPlotter(tk.Tk):
             self.metric_var.set(vals[0])
 
     def refresh_baseline_choices(self):
-        displays = list(self.state.display_to_id.keys())
-        displays.sort(key=dataset_sort_key)
+        displays = [self.state.id_to_display.get(sid, sid) for sid in ordered_source_ids(self.state)]
         self.baseline_combo["values"] = displays
         cur = self.baseline_display_var.get()
         if cur and cur not in self.state.display_to_id:
             self.baseline_display_var.set(displays[0] if displays else "")
         if not cur and displays:
             self.baseline_display_var.set(displays[0])
+        self.baseline_multi_displays = [name for name in self.baseline_multi_displays if name in displays]
+        if not self.baseline_multi_displays and self.baseline_display_var.get() in displays:
+            self.baseline_multi_displays = [self.baseline_display_var.get()]
+
+    def _open_baseline_multi_select(self):
+        if not self.compare_var.get():
+            return
+        displays = [self.state.id_to_display.get(sid, sid) for sid in ordered_source_ids(self.state)]
+        if not displays:
+            messagebox.showinfo("No datasets", "Load at least one dataset first.")
+            return
+
+        win = tk.Toplevel(self)
+        win.title("Select baseline datasets")
+        win.transient(self)
+        win.grab_set()
+
+        ttk.Label(win, text="Select one or more baseline datasets:").grid(row=0, column=0, sticky="w", padx=10, pady=(10, 6))
+        box = ttk.Frame(win)
+        box.grid(row=1, column=0, sticky="nsew", padx=10)
+
+        vars_by_name = {}
+        selected = set(self.baseline_multi_displays)
+        for idx, name in enumerate(displays):
+            var = tk.BooleanVar(value=name in selected)
+            vars_by_name[name] = var
+            ttk.Checkbutton(box, text=name, variable=var).grid(row=idx, column=0, sticky="w")
+
+        def _apply_selection():
+            picked = [name for name in displays if vars_by_name[name].get()]
+            if not picked:
+                messagebox.showinfo("Selection required", "Select at least one baseline dataset.")
+                return
+            self.baseline_multi_displays = picked
+            self.baseline_display_var.set(picked[0])
+            self._sync_state_settings_from_ui()
+            win.destroy()
+
+        btns = ttk.Frame(win)
+        btns.grid(row=2, column=0, sticky="e", padx=10, pady=(8, 10))
+        ttk.Button(btns, text="Cancel", command=win.destroy).grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(btns, text="Apply", command=_apply_selection).grid(row=0, column=1)
 
     # ---------------- Project lifecycle ----------------
     def _reset_project_state(self):
@@ -3602,7 +3670,7 @@ class DashboardDataPlotter(tk.Tk):
             f"{title} (interactive Plotly plot opened in browser).")
 
     def _plot_plotly_bar(self, angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold,
-                         compare, baseline_id, baseline_display, fixed_range):
+                         compare, baseline_id, baseline_ids, baseline_display, fixed_range):
         color_map = self._dataset_color_map()
         baseline_color = color_map.get(baseline_id, "red")
         try:
@@ -3613,6 +3681,7 @@ class DashboardDataPlotter(tk.Tk):
                 value_mode=value_mode,
                 compare=compare,
                 baseline_id=baseline_id,
+                baseline_ids=baseline_ids,
                 sentinels=sentinels,
                 outlier_threshold=outlier_threshold,
             )
@@ -3676,7 +3745,7 @@ class DashboardDataPlotter(tk.Tk):
                 "Partial plot", f"Plotted {len(data.labels)} bar(s) with errors.\n\n" + "\n".join(data.errors))
 
     def _plot_plotly_timeseries(self, metric_col, sentinels, value_mode, agg_mode, outlier_threshold,
-                                compare, baseline_id, baseline_display, fixed_range):
+                                compare, baseline_id, baseline_ids, baseline_display, fixed_range):
         color_map = self._dataset_color_map()
         baseline_color = color_map.get(baseline_id, "red")
 
@@ -3688,6 +3757,7 @@ class DashboardDataPlotter(tk.Tk):
                 value_mode=value_mode,
                 compare=compare,
                 baseline_id=baseline_id,
+                baseline_ids=baseline_ids,
                 sentinels=sentinels,
                 outlier_threshold=outlier_threshold,
             )
@@ -3780,7 +3850,7 @@ class DashboardDataPlotter(tk.Tk):
                 "Partial plot", f"Plotted {len(data.traces)} trace(s) with errors.\n\n" + "\n".join(data.errors))
 
     def _plot_plotly_cartesian(self, angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
-                               compare, baseline_id, baseline_display, fixed_range):
+                               compare, baseline_id, baseline_ids, baseline_display, fixed_range):
         fig = go.Figure()
         self._apply_cartesian_background_plotly(fig)
         color_map = self._dataset_color_map()
@@ -3795,6 +3865,7 @@ class DashboardDataPlotter(tk.Tk):
                 value_mode=value_mode,
                 compare=compare,
                 baseline_id=baseline_id,
+                baseline_ids=baseline_ids,
                 sentinels=sentinels,
                 outlier_threshold=outlier_threshold,
                 close_loop=close_loop,
@@ -3869,7 +3940,7 @@ class DashboardDataPlotter(tk.Tk):
                 "Partial plot", f"Plotted {len(data.traces)} trace(s) with errors.\n\n" + "\n".join(data.errors))
 
     def _plot_plotly_radar(self, angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
-                           compare, baseline_id, baseline_display, fixed_range):
+                           compare, baseline_id, baseline_ids, baseline_display, fixed_range):
         fig = go.Figure()
         self._apply_radar_background_plotly(fig)
         color_map = self._dataset_color_map()
@@ -3884,6 +3955,7 @@ class DashboardDataPlotter(tk.Tk):
                 value_mode=value_mode,
                 compare=compare,
                 baseline_id=baseline_id,
+                baseline_ids=baseline_ids,
                 sentinels=sentinels,
                 outlier_threshold=outlier_threshold,
                 close_loop=close_loop,
@@ -3985,11 +4057,14 @@ class DashboardDataPlotter(tk.Tk):
 
         compare = bool(self.compare_var.get())
         baseline_display = self.baseline_display_var.get().strip()
-        baseline_id = self.state.display_to_id.get(baseline_display, "")
+        baseline_names = self.baseline_multi_displays or [baseline_display]
+        baseline_ids = [self.state.display_to_id.get(name, "") for name in baseline_names]
+        baseline_ids = [sid for sid in baseline_ids if sid in self.state.loaded]
+        baseline_id = baseline_ids[0] if baseline_ids else ""
 
-        if compare and (not baseline_id or baseline_id not in self.state.loaded):
+        if compare and not baseline_ids:
             messagebox.showinfo("Baseline required",
-                                "Select a valid baseline dataset.")
+                                "Select one or more valid baseline datasets.")
             return
 
         plot_type = (self.plot_type_var.get() or "radar").strip().lower()
@@ -4015,6 +4090,7 @@ class DashboardDataPlotter(tk.Tk):
                     value_mode=value_mode,
                     compare=compare,
                     baseline_id=baseline_id,
+                    baseline_ids=baseline_ids,
                     sentinels=sentinels,
                     outlier_threshold=outlier_threshold,
                 )
@@ -4035,6 +4111,7 @@ class DashboardDataPlotter(tk.Tk):
                     value_mode=value_mode,
                     compare=compare,
                     baseline_id=baseline_id,
+                    baseline_ids=baseline_ids,
                     sentinels=sentinels,
                     outlier_threshold=outlier_threshold,
                 )
@@ -4058,6 +4135,7 @@ class DashboardDataPlotter(tk.Tk):
                     value_mode=value_mode,
                     compare=compare,
                     baseline_id=baseline_id,
+                    baseline_ids=baseline_ids,
                     sentinels=sentinels,
                     outlier_threshold=outlier_threshold,
                     close_loop=close_loop,
@@ -4081,6 +4159,7 @@ class DashboardDataPlotter(tk.Tk):
                     value_mode=value_mode,
                     compare=compare,
                     baseline_id=baseline_id,
+                    baseline_ids=baseline_ids,
                     sentinels=sentinels,
                     outlier_threshold=outlier_threshold,
                     close_loop=close_loop,
@@ -4185,11 +4264,14 @@ class DashboardDataPlotter(tk.Tk):
 
         compare = bool(self.compare_var.get())
         baseline_display = self.baseline_display_var.get().strip()
-        baseline_id = self.state.display_to_id.get(baseline_display, "")
+        baseline_names = self.baseline_multi_displays or [baseline_display]
+        baseline_ids = [self.state.display_to_id.get(name, "") for name in baseline_names]
+        baseline_ids = [sid for sid in baseline_ids if sid in self.state.loaded]
+        baseline_id = baseline_ids[0] if baseline_ids else ""
 
-        if compare and (not baseline_id or baseline_id not in self.state.loaded):
+        if compare and not baseline_ids:
             messagebox.showinfo("Baseline required",
-                                "Select a valid baseline dataset.")
+                                "Select one or more valid baseline datasets.")
             return
 
         plot_type = (self.plot_type_var.get() or "radar").strip().lower()
@@ -4204,7 +4286,7 @@ class DashboardDataPlotter(tk.Tk):
             if plot_type == "timeseries":
                 self._plot_plotly_timeseries(
                     metric_col, sentinels, value_mode, agg_mode, outlier_threshold,
-                    compare, baseline_id, baseline_display, fixed_range)
+                    compare, baseline_id, baseline_ids, baseline_display, fixed_range)
                 self._push_history()
                 self._warn_outliers_if_needed(
                     plot_type, angle_col, metric_col, sentinels, compare, baseline_id)
@@ -4214,7 +4296,7 @@ class DashboardDataPlotter(tk.Tk):
             if plot_type == "bar":
                 self._plot_plotly_bar(
                     angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold,
-                    compare, baseline_id, baseline_display, fixed_range)
+                    compare, baseline_id, baseline_ids, baseline_display, fixed_range)
                 self._push_history()
                 self._warn_outliers_if_needed(
                     plot_type, angle_col, metric_col, sentinels, compare, baseline_id)
@@ -4228,7 +4310,7 @@ class DashboardDataPlotter(tk.Tk):
             if plot_type == "cartesian":
                 self._plot_plotly_cartesian(
                     angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
-                    compare, baseline_id, baseline_display, fixed_range)
+                    compare, baseline_id, baseline_ids, baseline_display, fixed_range)
                 self._push_history()
                 self._warn_outliers_if_needed(
                     plot_type, angle_col, metric_col, sentinels, compare, baseline_id)
@@ -4636,6 +4718,7 @@ class DashboardDataPlotter(tk.Tk):
                 value_mode=value_mode,
                 compare=compare,
                 baseline_id=baseline_id,
+                baseline_ids=baseline_ids,
                 sentinels=sentinels,
                 outlier_threshold=outlier_threshold,
                 close_loop=close_loop,

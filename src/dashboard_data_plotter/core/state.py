@@ -18,6 +18,7 @@ class PlotSettings:
     value_mode: str = "absolute"
     compare: bool = False
     baseline_source_id: str = ""
+    baseline_source_ids: list[str] = field(default_factory=list)
     close_loop: bool = True
     use_plotly: bool = False
     radar_background: bool = True
@@ -78,7 +79,21 @@ def set_compare(state: ProjectState, compare: bool) -> None:
 
 
 def set_baseline(state: ProjectState, baseline_source_id: str) -> None:
-    state.plot_settings.baseline_source_id = str(baseline_source_id)
+    baseline = str(baseline_source_id)
+    state.plot_settings.baseline_source_id = baseline
+    state.plot_settings.baseline_source_ids = [baseline] if baseline else []
+
+
+def set_baselines(state: ProjectState, baseline_source_ids: Iterable[str]) -> None:
+    unique_ids: list[str] = []
+    seen = set()
+    for source_id in baseline_source_ids:
+        sid = str(source_id)
+        if sid and sid not in seen:
+            unique_ids.append(sid)
+            seen.add(sid)
+    state.plot_settings.baseline_source_ids = unique_ids
+    state.plot_settings.baseline_source_id = unique_ids[0] if unique_ids else ""
 
 
 def set_use_original_binned(state: ProjectState, use_original_binned: bool) -> None:

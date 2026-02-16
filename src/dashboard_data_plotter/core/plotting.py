@@ -236,6 +236,7 @@ def _resolve_plot_inputs(
     value_mode: Optional[str] = None,
     compare: Optional[bool] = None,
     baseline_id: Optional[str] = None,
+    baseline_ids: Optional[Iterable[str]] = None,
 ):
     plot = state.plot_settings
     angle_col = angle_col if angle_col is not None else plot.angle_column
@@ -268,6 +269,101 @@ def _get_plot_df(
     return state.loaded[source_id]
 
 
+
+
+def _resolve_baseline_ids(
+    state: ProjectState,
+    baseline_ids: Optional[Iterable[str]],
+    baseline_id: Optional[str],
+) -> list[str]:
+    if baseline_ids is None:
+        candidate_ids = list(state.plot_settings.baseline_source_ids)
+    else:
+        candidate_ids = [str(sid) for sid in baseline_ids]
+
+    if baseline_id:
+        baseline_text = str(baseline_id)
+        if baseline_text not in candidate_ids:
+            candidate_ids.insert(0, baseline_text)
+
+    resolved: list[str] = []
+    seen = set()
+    for sid in candidate_ids:
+        if sid in state.loaded and sid not in seen:
+            resolved.append(sid)
+            seen.add(sid)
+    return resolved
+
+
+def _aggregate_baseline_angle_values(
+    state: ProjectState,
+    baseline_ids: list[str],
+    *,
+    angle_col: str,
+    metric_col: str,
+    sentinels: list[float],
+    agg_mode: str,
+    value_mode: str,
+    outlier_threshold: Optional[float],
+    outlier_method: str,
+    use_original_binned: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    baseline_curves: list[np.ndarray] = []
+    theta = np.linspace(0.0, 360.0, 361, dtype=float)
+    for sid in baseline_ids:
+        baseline_df = _get_plot_df(state, sid, use_original_binned)
+        b_ang, b_val = prepare_angle_value_agg(
+            baseline_df,
+            angle_col,
+            metric_col,
+            sentinels,
+            agg=agg_mode,
+            outlier_threshold=outlier_threshold,
+            outlier_method=outlier_method,
+        )
+        b_val2 = _apply_value_mode(b_val, value_mode)
+        baseline_curves.append(circular_interp_baseline(b_ang, b_val2, theta))
+    baseline_stack = np.vstack(baseline_curves)
+    baseline_mean = np.nanmean(baseline_stack, axis=0)
+    return theta, baseline_mean
+
+
+def _aggregate_timeseries_baseline(
+    state: ProjectState,
+    baseline_ids: list[str],
+    *,
+    metric_col: str,
+    agg_mode: str,
+    value_mode: str,
+    sentinels: list[float],
+    outlier_threshold: Optional[float],
+    outlier_method: str,
+) -> np.ndarray:
+    series_list: list[np.ndarray] = []
+    for sid in baseline_ids:
+        if agg_mode == "pedal_stroke":
+            _, vals = _series_pedal_stroke(
+                state.loaded[sid], metric_col, sentinels, outlier_threshold, outlier_method
+            )
+            val2 = _apply_value_mode(vals, value_mode)
+        elif agg_mode == "roll_360deg":
+            _, vals = _series_roll_360(
+                state.loaded[sid], metric_col, sentinels, outlier_threshold, outlier_method
+            )
+            val2 = _apply_value_mode(vals, value_mode)
+        else:
+            vals = sanitize_numeric(state.loaded[sid][metric_col], sentinels)
+            vals = apply_outlier_filter(vals, threshold=outlier_threshold, method=outlier_method)
+            val2 = _apply_value_mode(vals.to_numpy(dtype=float), value_mode)
+        series_list.append(np.asarray(val2, dtype=float))
+
+    max_len = max((len(arr) for arr in series_list), default=0)
+    if max_len == 0:
+        return np.asarray([], dtype=float)
+    stack = np.full((len(series_list), max_len), np.nan, dtype=float)
+    for idx, arr in enumerate(series_list):
+        stack[idx, : len(arr)] = arr
+    return np.nanmean(stack, axis=0)
 def prepare_radar_plot(
     state: ProjectState,
     *,
@@ -277,6 +373,7 @@ def prepare_radar_plot(
     value_mode: Optional[str] = None,
     compare: Optional[bool] = None,
     baseline_id: Optional[str] = None,
+    baseline_ids: Optional[Iterable[str]] = None,
     sentinels: Optional[Iterable[float]] = None,
     outlier_threshold: Optional[float] = None,
     outlier_method: Optional[str] = None,
@@ -286,6 +383,7 @@ def prepare_radar_plot(
     angle_col, metric_col, agg_mode, value_mode, compare, baseline_id = _resolve_plot_inputs(
         state, angle_col, metric_col, agg_mode, value_mode, compare, baseline_id
     )
+    baseline_ids = _resolve_baseline_ids(state, baseline_ids, baseline_id)
     if not angle_col:
         raise ValueError("Angle column is required for radar plot.")
     if not metric_col:
@@ -305,28 +403,31 @@ def prepare_radar_plot(
     order = ordered_source_ids(state)
 
     if compare:
-        if not baseline_id or baseline_id not in state.loaded:
-            raise ValueError("Baseline dataset is required for comparison.")
-        b_label = state.id_to_display.get(baseline_id, baseline_id)
+        if not baseline_ids:
+            raise ValueError("At least one baseline dataset is required for comparison.")
+        baseline_labels = [state.id_to_display.get(sid, sid) for sid in baseline_ids]
+        b_label = ", ".join(baseline_labels)
         data.baseline_label = b_label
-        baseline_df = _get_plot_df(state, baseline_id, use_original_binned)
-        b_ang, b_val = prepare_angle_value_agg(
-            baseline_df,
-            angle_col,
-            metric_col,
-            sentinels,
-            agg=agg_mode,
+        b_ang, b_val2 = _aggregate_baseline_angle_values(
+            state,
+            baseline_ids,
+            angle_col=angle_col,
+            metric_col=metric_col,
+            sentinels=sentinels,
+            agg_mode=agg_mode,
+            value_mode=value_mode,
             outlier_threshold=outlier_threshold,
             outlier_method=outlier_method,
+            use_original_binned=use_original_binned,
         )
-        b_val2 = _apply_value_mode(b_val, value_mode)
 
         deltas: dict[str, tuple[np.ndarray, np.ndarray, str]] = {}
         max_abs = 0.0
+        baseline_id_set = set(baseline_ids)
         for sid in order:
             if not state.show_flag.get(sid, True):
                 continue
-            if sid == baseline_id:
+            if sid in baseline_id_set:
                 continue
             label = state.id_to_display.get(sid, sid)
             try:
@@ -369,7 +470,7 @@ def prepare_radar_plot(
         theta_ring = np.linspace(0.0, 360.0, 361)
         r_ring = np.full_like(theta_ring, offset, dtype=float)
         data.traces.append(
-            PlotTrace(label=b_label, x=theta_ring, y=r_ring, source_id=baseline_id, is_baseline=True)
+            PlotTrace(label=b_label, x=theta_ring, y=r_ring, source_id=None, is_baseline=True)
         )
 
         for _sid, (ang, delta, label) in deltas.items():
@@ -413,6 +514,7 @@ def prepare_cartesian_plot(
     value_mode: Optional[str] = None,
     compare: Optional[bool] = None,
     baseline_id: Optional[str] = None,
+    baseline_ids: Optional[Iterable[str]] = None,
     sentinels: Optional[Iterable[float]] = None,
     outlier_threshold: Optional[float] = None,
     outlier_method: Optional[str] = None,
@@ -422,6 +524,7 @@ def prepare_cartesian_plot(
     angle_col, metric_col, agg_mode, value_mode, compare, baseline_id = _resolve_plot_inputs(
         state, angle_col, metric_col, agg_mode, value_mode, compare, baseline_id
     )
+    baseline_ids = _resolve_baseline_ids(state, baseline_ids, baseline_id)
     if not angle_col:
         raise ValueError("Angle column is required for cartesian plot.")
     if not metric_col:
@@ -441,26 +544,28 @@ def prepare_cartesian_plot(
     order = ordered_source_ids(state)
 
     if compare:
-        if not baseline_id or baseline_id not in state.loaded:
-            raise ValueError("Baseline dataset is required for comparison.")
-        b_label = state.id_to_display.get(baseline_id, baseline_id)
-        data.baseline_label = b_label
-        baseline_df = _get_plot_df(state, baseline_id, use_original_binned)
-        b_ang, b_val = prepare_angle_value_agg(
-            baseline_df,
-            angle_col,
-            metric_col,
-            sentinels,
-            agg=agg_mode,
+        if not baseline_ids:
+            raise ValueError("At least one baseline dataset is required for comparison.")
+        baseline_labels = [state.id_to_display.get(sid, sid) for sid in baseline_ids]
+        data.baseline_label = ", ".join(baseline_labels)
+        b_ang, b_val2 = _aggregate_baseline_angle_values(
+            state,
+            baseline_ids,
+            angle_col=angle_col,
+            metric_col=metric_col,
+            sentinels=sentinels,
+            agg_mode=agg_mode,
+            value_mode=value_mode,
             outlier_threshold=outlier_threshold,
             outlier_method=outlier_method,
+            use_original_binned=use_original_binned,
         )
-        b_val2 = _apply_value_mode(b_val, value_mode)
 
+        baseline_id_set = set(baseline_ids)
         for sid in order:
             if not state.show_flag.get(sid, True):
                 continue
-            if sid == baseline_id:
+            if sid in baseline_id_set:
                 continue
             label = state.id_to_display.get(sid, sid)
             try:
@@ -530,6 +635,7 @@ def prepare_bar_plot(
     value_mode: Optional[str] = None,
     compare: Optional[bool] = None,
     baseline_id: Optional[str] = None,
+    baseline_ids: Optional[Iterable[str]] = None,
     sentinels: Optional[Iterable[float]] = None,
     outlier_threshold: Optional[float] = None,
     outlier_method: Optional[str] = None,
@@ -538,6 +644,7 @@ def prepare_bar_plot(
     _, metric_col, agg_mode, value_mode, compare, baseline_id = _resolve_plot_inputs(
         state, None, metric_col, agg_mode, value_mode, compare, baseline_id
     )
+    baseline_ids = _resolve_baseline_ids(state, baseline_ids, baseline_id)
     if value_mode == "percent_mean":
         raise ValueError("Bar plot does not support % of dataset mean.")
     if not metric_col:
@@ -556,28 +663,36 @@ def prepare_bar_plot(
     order = ordered_source_ids(state)
 
     baseline_value = None
+    baseline_id_set = set(baseline_ids)
     if compare:
-        if not baseline_id or baseline_id not in state.loaded:
-            raise ValueError("Baseline dataset is required for comparison.")
-        baseline_label = state.id_to_display.get(baseline_id, baseline_id)
-        data.baseline_label = baseline_label
-        baseline_df = _get_plot_df(state, baseline_id, use_original_binned)
-        baseline_value = aggregate_metric(
-            baseline_df[metric_col],
-            sentinels,
-            agg=agg_mode,
-            outlier_threshold=outlier_threshold,
-            outlier_method=outlier_method,
-        )
+        if not baseline_ids:
+            raise ValueError("At least one baseline dataset is required for comparison.")
+        baseline_labels = [state.id_to_display.get(sid, sid) for sid in baseline_ids]
+        data.baseline_label = ", ".join(baseline_labels)
+        baseline_values: list[float] = []
+        for sid in baseline_ids:
+            baseline_df = _get_plot_df(state, sid, use_original_binned)
+            baseline_values.append(
+                aggregate_metric(
+                    baseline_df[metric_col],
+                    sentinels,
+                    agg=agg_mode,
+                    outlier_threshold=outlier_threshold,
+                    outlier_method=outlier_method,
+                )
+            )
+        baseline_value = float(np.nanmean(np.asarray(baseline_values, dtype=float)))
 
     ordered_ids = []
     for sid in order:
-        if compare and sid == baseline_id:
+        if compare and sid in baseline_id_set:
             ordered_ids.append(sid)
         elif state.show_flag.get(sid, True):
             ordered_ids.append(sid)
-    if compare and baseline_id and baseline_id not in ordered_ids:
-        ordered_ids.append(baseline_id)
+    if compare:
+        for sid in baseline_ids:
+            if sid not in ordered_ids:
+                ordered_ids.append(sid)
 
     for sid in ordered_ids:
         label = state.id_to_display.get(sid, sid)
@@ -591,7 +706,7 @@ def prepare_bar_plot(
                 outlier_method=outlier_method,
             )
             if compare and baseline_value is not None:
-                if sid == baseline_id:
+                if sid in baseline_id_set:
                     val = 0.0
                 else:
                     val = val - baseline_value
@@ -611,6 +726,7 @@ def prepare_timeseries_plot(
     value_mode: Optional[str] = None,
     compare: Optional[bool] = None,
     baseline_id: Optional[str] = None,
+    baseline_ids: Optional[Iterable[str]] = None,
     sentinels: Optional[Iterable[float]] = None,
     outlier_threshold: Optional[float] = None,
     outlier_method: Optional[str] = None,
@@ -618,6 +734,7 @@ def prepare_timeseries_plot(
     _, metric_col, agg_mode, value_mode, compare, baseline_id = _resolve_plot_inputs(
         state, None, metric_col, agg_mode, value_mode, compare, baseline_id
     )
+    baseline_ids = _resolve_baseline_ids(state, baseline_ids, baseline_id)
     if not metric_col:
         raise ValueError("Metric column is required for time series plot.")
     sentinels = _resolve_sentinels(state, sentinels)
@@ -639,31 +756,27 @@ def prepare_timeseries_plot(
     data.x_label = x_label
 
     baseline_series = None
-    baseline_label = ""
+    baseline_id_set = set(baseline_ids)
     if compare:
-        if not baseline_id or baseline_id not in state.loaded:
-            raise ValueError("Baseline dataset is required for comparison.")
-        baseline_label = state.id_to_display.get(baseline_id, baseline_id)
-        data.baseline_label = baseline_label
-        if agg_mode == "pedal_stroke":
-            _, b_vals = _series_pedal_stroke(
-                state.loaded[baseline_id], metric_col, sentinels, outlier_threshold, outlier_method
-            )
-            baseline_series = _apply_value_mode(b_vals, value_mode)
-        elif agg_mode == "roll_360deg":
-            _, b_vals = _series_roll_360(
-                state.loaded[baseline_id], metric_col, sentinels, outlier_threshold, outlier_method
-            )
-            baseline_series = _apply_value_mode(b_vals, value_mode)
-        else:
-            vals = sanitize_numeric(state.loaded[baseline_id][metric_col], sentinels)
-            vals = apply_outlier_filter(vals, threshold=outlier_threshold, method=outlier_method)
-            baseline_series = _apply_value_mode(vals.to_numpy(dtype=float), value_mode)
+        if not baseline_ids:
+            raise ValueError("At least one baseline dataset is required for comparison.")
+        baseline_labels = [state.id_to_display.get(sid, sid) for sid in baseline_ids]
+        data.baseline_label = ", ".join(baseline_labels)
+        baseline_series = _aggregate_timeseries_baseline(
+            state,
+            baseline_ids,
+            metric_col=metric_col,
+            agg_mode=agg_mode,
+            value_mode=value_mode,
+            sentinels=sentinels,
+            outlier_threshold=outlier_threshold,
+            outlier_method=outlier_method,
+        )
 
     for sid in order:
         if not state.show_flag.get(sid, True):
             continue
-        if compare and sid == baseline_id:
+        if compare and sid in baseline_id_set:
             continue
         label = state.id_to_display.get(sid, sid)
         try:

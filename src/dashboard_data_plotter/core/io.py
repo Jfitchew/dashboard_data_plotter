@@ -28,9 +28,14 @@ def build_project_settings(state: ProjectState) -> dict[str, Any]:
         state.id_to_display.get(sid, sid): bool(state.show_flag.get(sid, True))
         for sid in ordered_source_ids(state)
     }
-    baseline_display = ""
-    if plot.baseline_source_id:
-        baseline_display = state.id_to_display.get(plot.baseline_source_id, "")
+    baseline_displays = [
+        state.id_to_display.get(sid, sid)
+        for sid in plot.baseline_source_ids
+        if sid in state.loaded
+    ]
+    if not baseline_displays and plot.baseline_source_id:
+        baseline_displays = [state.id_to_display.get(plot.baseline_source_id, "")]
+    baseline_display = baseline_displays[0] if baseline_displays else ""
 
     return {
         "version": PROJECT_SETTINGS_VERSION,
@@ -44,6 +49,7 @@ def build_project_settings(state: ProjectState) -> dict[str, Any]:
             "value_mode": plot.value_mode,
             "compare": plot.compare,
             "baseline_display": baseline_display,
+            "baseline_displays": baseline_displays,
             "close_loop": plot.close_loop,
             "use_plotly": plot.use_plotly,
             "radar_background": plot.radar_background,
@@ -111,9 +117,19 @@ def apply_project_settings(state: ProjectState, settings: dict[str, Any]) -> Non
         if "range_fixed" in plot:
             state.plot_settings.range_fixed = bool(plot.get("range_fixed"))
 
+        baseline_displays_raw = plot.get("baseline_displays", [])
+        baseline_ids: list[str] = []
+        if isinstance(baseline_displays_raw, list):
+            for item in baseline_displays_raw:
+                sid = state.display_to_id.get(str(item), "")
+                if sid and sid not in baseline_ids:
+                    baseline_ids.append(sid)
         baseline_display = str(plot.get("baseline_display") or "")
         baseline_id = state.display_to_id.get(baseline_display, "")
-        state.plot_settings.baseline_source_id = baseline_id
+        if baseline_id and baseline_id not in baseline_ids:
+            baseline_ids.insert(0, baseline_id)
+        state.plot_settings.baseline_source_ids = baseline_ids
+        state.plot_settings.baseline_source_id = baseline_ids[0] if baseline_ids else ""
 
     if isinstance(cleaning, dict):
         sentinels = cleaning.get("sentinels", [])

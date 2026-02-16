@@ -231,6 +231,7 @@ def _snapshot_plot_settings(
     radar_background: bool,
     compare: bool,
     baseline_display: str,
+    baseline_displays: list[str],
 ) -> dict:
     return {
         "plot_type": plot_type,
@@ -249,6 +250,7 @@ def _snapshot_plot_settings(
         "radar_background": radar_background,
         "compare": compare,
         "baseline_display": baseline_display,
+        "baseline_displays": baseline_displays,
     }
 
 
@@ -345,6 +347,7 @@ def _render_plot_controls() -> None:
     _setdefault_state("radar_background", True)
     _setdefault_state("compare", False)
     _setdefault_state("baseline_display", "")
+    _setdefault_state("baseline_displays", [])
 
     st.subheader("Plot")
     plot_type_options = ["Radar", "Cartesian", "Bar", "Time series"]
@@ -428,20 +431,26 @@ def _render_plot_controls() -> None:
 
     compare = st.checkbox("Compare vs baseline", key="compare")
     baseline_id = None
+    baseline_ids: list[str] = []
     baseline_display = st.session_state.baseline_display
+    baseline_displays = list(st.session_state.baseline_displays)
     if compare:
         baseline_options = [state.id_to_display.get(sid, sid) for sid in ordered_source_ids(state)]
-        if baseline_options and baseline_display not in baseline_options:
-            baseline_display = baseline_options[0]
-            st.session_state.baseline_display = baseline_display
-        baseline_index = baseline_options.index(baseline_display) if baseline_options else 0
-        baseline_display = st.selectbox(
-            "Baseline dataset",
+        baseline_displays = [name for name in baseline_displays if name in baseline_options]
+        if not baseline_displays and baseline_options:
+            baseline_displays = [baseline_options[0]]
+        baseline_displays = st.multiselect(
+            "Baseline dataset(s)",
             baseline_options,
-            index=baseline_index,
-            key="baseline_display",
+            default=baseline_displays,
+            key="baseline_displays",
         )
-        baseline_id = state.display_to_id.get(baseline_display)
+        if baseline_displays:
+            baseline_display = baseline_displays[0]
+            st.session_state.baseline_display = baseline_display
+            baseline_id = state.display_to_id.get(baseline_display)
+            baseline_ids = [state.display_to_id.get(name) for name in baseline_displays]
+            baseline_ids = [sid for sid in baseline_ids if sid]
 
     history = st.session_state.plot_history
     history_index = st.session_state.plot_history_index
@@ -514,6 +523,10 @@ def _render_plot_controls() -> None:
                 st.error("Outlier threshold must be a valid number.")
                 return
 
+        if compare and not baseline_ids:
+            st.warning("Select at least one baseline dataset for comparison.")
+            return
+
         try:
             if plot_type == "Radar":
                 data = prepare_radar_plot(
@@ -524,6 +537,7 @@ def _render_plot_controls() -> None:
                     value_mode=value_mode,
                     compare=compare,
                     baseline_id=baseline_id,
+                    baseline_ids=baseline_ids,
                     sentinels=sentinels,
                     outlier_threshold=resolved_outlier_threshold,
                     outlier_method=outlier_method,
@@ -560,6 +574,7 @@ def _render_plot_controls() -> None:
                     value_mode=value_mode,
                     compare=compare,
                     baseline_id=baseline_id,
+                    baseline_ids=baseline_ids,
                     sentinels=sentinels,
                     outlier_threshold=resolved_outlier_threshold,
                     outlier_method=outlier_method,
@@ -585,6 +600,7 @@ def _render_plot_controls() -> None:
                     value_mode="absolute",
                     compare=compare,
                     baseline_id=baseline_id,
+                    baseline_ids=baseline_ids,
                     sentinels=sentinels,
                     outlier_threshold=resolved_outlier_threshold,
                     outlier_method=outlier_method,
@@ -605,6 +621,7 @@ def _render_plot_controls() -> None:
                     value_mode=value_mode,
                     compare=compare,
                     baseline_id=baseline_id,
+                    baseline_ids=baseline_ids,
                     sentinels=sentinels,
                     outlier_threshold=resolved_outlier_threshold,
                     outlier_method=outlier_method,
@@ -652,6 +669,7 @@ def _render_plot_controls() -> None:
                     radar_background=radar_background,
                     compare=compare,
                     baseline_display=baseline_display,
+                    baseline_displays=baseline_displays,
                 )
                 if st.session_state.plot_history_index < len(history) - 1:
                     del history[st.session_state.plot_history_index + 1:]

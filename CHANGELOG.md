@@ -65,3 +65,4 @@
   - 3.20.55 - 2026-02-11 - Fix HTML/PDF export default filenames to avoid double .rep.
   - 3.20.56 - 2026-02-11 - Bundle GUIDE.md and CHANGELOG.md in PyInstaller builds.
   - 3.20.57 - 2026-02-11 - Allow report export to succeed when assets are locked; warn instead.
+  - 3.20.58 - 2026-02-11 - Added Plot Stats analysis dialog with 4-bin radar/cartesian significance and bar whiskers from rolling 360° median spread.

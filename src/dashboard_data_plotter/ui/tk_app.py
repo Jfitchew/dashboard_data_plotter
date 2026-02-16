@@ -44,6 +44,10 @@ from dashboard_data_plotter.core.plotting import (
     prepare_bar_plot,
     prepare_timeseries_plot,
 )
+from dashboard_data_plotter.core.stats import (
+    compute_bar_stats,
+    compute_radar_cartesian_stats,
+)
 from dashboard_data_plotter.data.loaders import (
     DEFAULT_SENTINELS,
     extract_named_datasets,
@@ -1011,22 +1015,25 @@ class DashboardDataPlotter(tk.Tk):
         self.export_plot_btn = ttk.Button(
             plot_btns, text="Export Plot Data", command=self.export_plot_data)
         self.export_plot_btn.grid(row=0, column=1, padx=(10, 0))
+        self.plot_stats_btn = ttk.Button(
+            plot_btns, text="Plot Stats", command=self.show_plot_stats)
+        self.plot_stats_btn.grid(row=0, column=2, padx=(10, 0))
         self.prev_btn = ttk.Button(
             plot_btns, text="Prev", command=self._plot_prev, state="disabled", width=5)
-        self.prev_btn.grid(row=0, column=2, padx=(10, 0))
+        self.prev_btn.grid(row=0, column=3, padx=(10, 0))
         self.delete_btn = ttk.Button(
             plot_btns, text="X", command=self._delete_history_entry, state="disabled", width=3)
-        self.delete_btn.grid(row=0, column=3, padx=(2, 0))
+        self.delete_btn.grid(row=0, column=4, padx=(2, 0))
         self.next_btn = ttk.Button(
             plot_btns, text="Next", command=self._plot_next, state="disabled", width=5)
-        self.next_btn.grid(row=0, column=4, padx=(2, 0))
+        self.next_btn.grid(row=0, column=5, padx=(2, 0))
         self.clear_history_btn = ttk.Button(
             plot_btns, text="Clear", command=self._clear_history, state="disabled", width=6)
-        self.clear_history_btn.grid(row=0, column=5, padx=(6, 0))
+        self.clear_history_btn.grid(row=0, column=6, padx=(6, 0))
         self.history_label_var = tk.StringVar(value="History 0/0")
         self.history_label = ttk.Label(
             plot_btns, textvariable=self.history_label_var)
-        self.history_label.grid(row=0, column=6, padx=(8, 0))
+        self.history_label.grid(row=0, column=7, padx=(8, 0))
 
         style = ttk.Style()
         style.configure(
@@ -1334,6 +1341,8 @@ class DashboardDataPlotter(tk.Tk):
             (self.baseline_combo, "Choose the baseline dataset for comparison mode."),
             (self.plot_btn, "Plot or refresh using current settings."),
             (self.export_plot_btn, "Export the currently displayed plot data to CSV."),
+            (self.plot_stats_btn,
+             "Show correlation/significance analysis for the current plot settings."),
             (self.prev_btn, "Go to the previous plot in history."),
             (self.delete_btn, "Remove the current plot from history."),
             (self.next_btn, "Go to the next plot in history."),
@@ -4023,6 +4032,36 @@ class DashboardDataPlotter(tk.Tk):
         longest_label = max((len(str(label)) for label in data.labels), default=0)
         tick_font_size = 9 if longest_label <= 15 else 8
         fig = go.Figure()
+        error_y = None
+        try:
+            stats = compute_bar_stats(
+                self.state,
+                metric_col=metric_col,
+                agg_mode=agg_mode,
+                compare=compare,
+                baseline_id=baseline_id,
+                sentinels=sentinels,
+                outlier_threshold=outlier_threshold,
+                use_original_binned=bool(self.use_original_binned_var.get()),
+            )
+            whisker_map = {w.label: w for w in stats.whiskers}
+            array_plus = []
+            array_minus = []
+            any_whisker = False
+            for lbl, yv in zip(data.labels, data.values):
+                w = whisker_map.get(lbl)
+                if w and w.has_whisker:
+                    array_plus.append(max(0.0, float(w.high - yv)))
+                    array_minus.append(max(0.0, float(yv - w.low)))
+                    any_whisker = True
+                else:
+                    array_plus.append(0.0)
+                    array_minus.append(0.0)
+            if any_whisker:
+                error_y = dict(type="data", symmetric=False, array=array_plus, arrayminus=array_minus)
+        except Exception:
+            error_y = None
+
         fig.add_bar(
             x=data.labels,
             y=data.values,
@@ -4030,6 +4069,7 @@ class DashboardDataPlotter(tk.Tk):
             text=text_values,
             textposition="outside",
             cliponaxis=False,
+            error_y=error_y,
         )
         fig.update_layout(
             title=title,
@@ -4336,6 +4376,155 @@ class DashboardDataPlotter(tk.Tk):
         raw = re.sub(r"[^a-z0-9]+", "_",
                      str(label or "").strip().lower()).strip("_")
         return raw or default
+
+    def _format_stat_number(self, value: float, digits: int = 4) -> str:
+        if value is None:
+            return ""
+        try:
+            v = float(value)
+        except Exception:
+            return ""
+        if not np.isfinite(v):
+            return ""
+        return f"{v:.{digits}f}"
+
+    def _open_stats_table(self, title: str, columns: list[str], rows: list[tuple], errors: list[str]) -> None:
+        dialog = tk.Toplevel(self)
+        dialog.title(title)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry("920x560")
+
+        container = ttk.Frame(dialog, padding=10)
+        container.pack(fill="both", expand=True)
+        tree = ttk.Treeview(container, columns=columns, show="headings", height=18)
+        for col in columns:
+            tree.heading(col, text=col)
+            tree.column(col, width=130, stretch=True, anchor="center")
+        for row in rows:
+            tree.insert("", "end", values=row)
+        tree.pack(side="left", fill="both", expand=True)
+        scroll = ttk.Scrollbar(container, orient="vertical", command=tree.yview)
+        scroll.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=scroll.set)
+
+        if errors:
+            err_txt = tk.Text(dialog, height=4, wrap="word")
+            err_txt.pack(fill="x", padx=10, pady=(4, 0))
+            err_txt.insert("end", "Warnings:\n" + "\n".join(errors))
+            err_txt.configure(state="disabled")
+
+        ttk.Button(dialog, text="Close", command=dialog.destroy).pack(anchor="e", padx=10, pady=8)
+
+    def show_plot_stats(self):
+        if not self.state.loaded:
+            messagebox.showinfo("No data", "Load at least one dataset first.")
+            return
+
+        self._sync_state_settings_from_ui()
+
+        plot_type = (self.plot_type_var.get() or "radar").strip().lower()
+        metric_col = self.metric_var.get().strip()
+        angle_col = self.angle_var.get().strip()
+        if not metric_col:
+            messagebox.showinfo("Missing selection", "Select a metric column.")
+            return
+
+        sentinels = parse_sentinels(self.sentinels_var.get())
+        value_mode = self.value_mode_var.get()
+        agg_mode = self._normalize_agg_mode(self.agg_var.get())
+        compare = bool(self.compare_var.get())
+        baseline_display = self.baseline_display_var.get().strip()
+        baseline_id = self.state.display_to_id.get(baseline_display, "")
+        outlier_threshold = self._get_outlier_threshold()
+        if outlier_threshold == "invalid":
+            return
+
+        if plot_type in ("radar", "cartesian"):
+            if not angle_col:
+                messagebox.showinfo("Missing selection", "Select an angle column.")
+                return
+            try:
+                stats = compute_radar_cartesian_stats(
+                    self.state,
+                    angle_col=angle_col,
+                    metric_col=metric_col,
+                    agg_mode=agg_mode,
+                    value_mode=value_mode,
+                    sentinels=sentinels,
+                    outlier_threshold=outlier_threshold,
+                    use_original_binned=bool(self.use_original_binned_var.get()),
+                )
+            except Exception as exc:
+                messagebox.showerror("Plot Stats", str(exc))
+                return
+
+            rows = []
+            for rng in stats.ranges:
+                range_label = f"{rng.start_deg:.2f}° to {rng.end_deg:.2f}°"
+                for pair in rng.pairs:
+                    rows.append((
+                        range_label,
+                        pair.dataset_a,
+                        pair.dataset_b,
+                        pair.n,
+                        self._format_stat_number(pair.corr_r),
+                        self._format_stat_number(pair.p_value),
+                        pair.summary,
+                    ))
+            if not rows:
+                messagebox.showinfo("Plot Stats", "Not enough valid dataset data for pairwise stats.")
+                return
+            self._open_stats_table(
+                "Plot Stats: Radar/Cartesian",
+                ["Angle range", "Dataset A", "Dataset B", "n", "corr r", "p-value", "summary"],
+                rows,
+                stats.errors,
+            )
+            return
+
+        if plot_type == "bar":
+            if value_mode == "percent_mean":
+                value_mode = "absolute"
+            if compare and (not baseline_id or baseline_id not in self.state.loaded):
+                messagebox.showinfo("Baseline required", "Select a valid baseline dataset.")
+                return
+            try:
+                stats = compute_bar_stats(
+                    self.state,
+                    metric_col=metric_col,
+                    agg_mode=agg_mode,
+                    compare=compare,
+                    baseline_id=baseline_id,
+                    sentinels=sentinels,
+                    outlier_threshold=outlier_threshold,
+                    use_original_binned=bool(self.use_original_binned_var.get()),
+                )
+            except Exception as exc:
+                messagebox.showerror("Plot Stats", str(exc))
+                return
+            rows = []
+            for pair in stats.pairs:
+                rows.append((
+                    pair.dataset_a,
+                    pair.dataset_b,
+                    pair.n,
+                    self._format_stat_number(pair.corr_r),
+                    self._format_stat_number(pair.p_value),
+                    pair.summary,
+                ))
+            if not rows:
+                messagebox.showinfo("Plot Stats", "Not enough valid bar samples for significance table.")
+                return
+            self._open_stats_table(
+                "Plot Stats: Bar",
+                ["Dataset A", "Dataset B", "n", "corr r", "p-value", "summary"],
+                rows,
+                stats.errors,
+            )
+            return
+
+        messagebox.showinfo("Plot Stats", "Plot Stats is available for Radar, Cartesian, and Bar plots.")
 
     def export_plot_data(self):
         if not self.state.loaded:
@@ -4783,6 +4972,43 @@ class DashboardDataPlotter(tk.Tk):
             bar_colors = [color_map.get(self.state.display_to_id.get(
                 label, ""), "#1f77b4") for label in data.labels]
             bars = self.ax.bar(x, data.values, color=bar_colors)
+
+            try:
+                stats = compute_bar_stats(
+                    self.state,
+                    metric_col=metric_col,
+                    agg_mode=agg_mode,
+                    compare=compare,
+                    baseline_id=baseline_id,
+                    sentinels=sentinels,
+                    outlier_threshold=outlier_threshold,
+                    use_original_binned=bool(self.use_original_binned_var.get()),
+                )
+                whisker_map = {w.label: w for w in stats.whiskers}
+                x_err = []
+                y_low = []
+                y_high = []
+                for idx_lbl, (lbl, yv) in enumerate(zip(data.labels, data.values)):
+                    w = whisker_map.get(lbl)
+                    if w and w.has_whisker:
+                        x_err.append(float(idx_lbl))
+                        y_low.append(max(0.0, float(yv - w.low)))
+                        y_high.append(max(0.0, float(w.high - yv)))
+                if x_err:
+                    self.ax.errorbar(
+                        x_err,
+                        [data.values[int(i)] for i in x_err],
+                        yerr=[y_low, y_high],
+                        fmt="none",
+                        ecolor="black",
+                        elinewidth=1.2,
+                        capsize=4,
+                        capthick=1.2,
+                        zorder=3,
+                    )
+            except Exception:
+                pass
+
             self.ax.set_xticks(x)
             tick_font_size, bottom_margin = self._bar_label_layout(data.labels)
             self.ax.set_xticklabels(

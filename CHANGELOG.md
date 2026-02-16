@@ -46,6 +46,7 @@
 <!-- AUTO-CHANGELOG-END -->
 ## Manual Entries
 3.19 - 2026-02-10 - Manual notes
+  - 3.19.42 - Added bar-value annotations (including comparison bars), adaptive significant-digit rounding, and long-label spacing/font adjustments for bar charts.
   - 3.19.41 - Implemented auto-populated changelog from git.
 3.20 - 2026-02-10 - Manual notes
   - 3.20.42 - 2026-02-10 - Added report snapshots with annotations and HTML/PDF export.
@@ -64,8 +65,3 @@
   - 3.20.55 - 2026-02-11 - Fix HTML/PDF export default filenames to avoid double .rep.
   - 3.20.56 - 2026-02-11 - Bundle GUIDE.md and CHANGELOG.md in PyInstaller builds.
   - 3.20.57 - 2026-02-11 - Allow report export to succeed when assets are locked; warn instead.
-  - 3.20.58 - 2026-02-11 - Added annotation format dialog and persisted annotation style defaults in report/project JSON.
-  - 3.20.59 - 2026-02-11 - Validate annotation text/arrow colours before saving format settings to avoid runtime annotation errors.
-  - 3.20.60 - 2026-02-16 - Added annotation add dialog format access and edit/delete on annotation click.
-  - 3.20.61 - 2026-02-16 - Enabled multiline annotation text, centered modal dialogs, and moved format control into add dialog.
-  - 3.20.62 - 2026-02-16 - Fix annotation dialog crash by reading text before destroying the dialog.

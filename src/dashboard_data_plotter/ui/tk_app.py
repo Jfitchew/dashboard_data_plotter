@@ -357,16 +357,17 @@ class DashboardDataPlotter(tk.Tk):
             except OSError:
                 pass
 
+        packaged_path = self._changelog_packaged_path()
+        if packaged_path and os.path.isfile(packaged_path):
+            return packaged_path
+
         candidate_paths = [
             user_path,
             self._changelog_repo_path(),
-            self._changelog_packaged_path(),
         ]
-        packaged_path = self._changelog_packaged_path()
         for path in candidate_paths:
             if path and os.path.isfile(path):
-                if path != packaged_path:
-                    self._update_changelog_from_git(path)
+                self._update_changelog_from_git(path)
                 return path
 
         try:
@@ -2163,7 +2164,14 @@ class DashboardDataPlotter(tk.Tk):
 
         self.status.set("Added snapshot to report.")
 
-    def _build_report_html(self, report: dict, asset_prefix: str, pdf_mode: bool) -> str:
+    def _build_report_html(
+        self,
+        report: dict,
+        asset_prefix: str,
+        pdf_mode: bool,
+        embed_assets: bool = False,
+        asset_root: str = "",
+    ) -> str:
         title = html.escape(str(report.get("title", "Report")))
         project_title = html.escape(str(report.get("project_title", "")))
         created_at = html.escape(str(report.get("created_at", "")))
@@ -2240,15 +2248,36 @@ class DashboardDataPlotter(tk.Tk):
                 img_rel = assets.get("image")
                 html_rel = assets.get("html")
                 if img_rel:
-                    img_path = html.escape(os.path.join(
-                        asset_prefix, img_rel).replace("\\", "/"))
-                    lines.append(
-                        f"<img class=\"plot-img\" src=\"{img_path}\" alt=\"Plot snapshot\" />")
+                    if embed_assets and asset_root:
+                        img_path = os.path.join(asset_root, img_rel)
+                        data_uri = self._load_asset_data_uri(img_path)
+                        if data_uri:
+                            lines.append(
+                                f"<img class=\"plot-img\" src=\"{data_uri}\" alt=\"Plot snapshot\" />")
+                        else:
+                            lines.append(
+                                "<p><em>Image snapshot missing.</em></p>")
+                    else:
+                        img_path = html.escape(os.path.join(
+                            asset_prefix, img_rel).replace("\\", "/"))
+                        lines.append(
+                            f"<img class=\"plot-img\" src=\"{img_path}\" alt=\"Plot snapshot\" />")
                 elif html_rel and not pdf_mode:
-                    html_path = html.escape(os.path.join(
-                        asset_prefix, html_rel).replace("\\", "/"))
-                    lines.append(
-                        f"<iframe class=\"plot-frame\" src=\"{html_path}\"></iframe>")
+                    if embed_assets and asset_root:
+                        html_path = os.path.join(asset_root, html_rel)
+                        html_doc = self._read_asset_text(html_path)
+                        if html_doc:
+                            srcdoc = html.escape(html_doc)
+                            lines.append(
+                                f"<iframe class=\"plot-frame\" srcdoc=\"{srcdoc}\"></iframe>")
+                        else:
+                            lines.append(
+                                "<p><em>Interactive plot missing.</em></p>")
+                    else:
+                        html_path = html.escape(os.path.join(
+                            asset_prefix, html_rel).replace("\\", "/"))
+                        lines.append(
+                            f"<iframe class=\"plot-frame\" src=\"{html_path}\"></iframe>")
                 elif html_rel and pdf_mode:
                     lines.append(
                         "<p><em>Interactive plot available in HTML export.</em></p>")
@@ -2286,6 +2315,33 @@ class DashboardDataPlotter(tk.Tk):
         lines.append("</div>")
         lines.append("</body></html>")
         return "\n".join(lines)
+
+    def _load_asset_data_uri(self, path: str) -> str:
+        if not os.path.isfile(path):
+            return ""
+        ext = os.path.splitext(path)[1].lower()
+        mime = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".bmp": "image/bmp",
+        }.get(ext, "application/octet-stream")
+        try:
+            with open(path, "rb") as handle:
+                data = base64.b64encode(handle.read()).decode("ascii")
+        except OSError:
+            return ""
+        return f"data:{mime};base64,{data}"
+
+    def _read_asset_text(self, path: str) -> str:
+        if not os.path.isfile(path):
+            return ""
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return handle.read()
+        except OSError:
+            return ""
 
     def _render_markdown_html(self, text: str) -> str:
         if not text:
@@ -2345,34 +2401,14 @@ class DashboardDataPlotter(tk.Tk):
         if not out_path:
             return
 
-        export_assets_dir = os.path.splitext(out_path)[0] + "_assets"
-        os.makedirs(export_assets_dir, exist_ok=True)
-
-        copy_errors = []
         report_assets = self._current_report_assets_dir()
-        for snap in self.report_state.get("snapshots", []):
-            assets = snap.get("assets", {})
-            if not isinstance(assets, dict):
-                continue
-            for key in ("image", "html"):
-                rel_path = assets.get(key)
-                if not rel_path:
-                    continue
-                src_path = os.path.join(report_assets, rel_path)
-                dst_path = os.path.join(export_assets_dir, rel_path)
-                if os.path.isfile(src_path):
-                    try:
-                        shutil.copy2(src_path, dst_path)
-                    except PermissionError:
-                        copy_errors.append(
-                            f"Asset in use, could not copy: {rel_path}")
-                    except OSError as exc:
-                        copy_errors.append(
-                            f"Failed to copy {rel_path}: {exc}")
-
-        asset_prefix = os.path.basename(export_assets_dir)
         html_text = self._build_report_html(
-            self.report_state, asset_prefix, pdf_mode=False)
+            self.report_state,
+            "",
+            pdf_mode=False,
+            embed_assets=True,
+            asset_root=report_assets,
+        )
         try:
             with open(out_path, "w", encoding="utf-8") as handle:
                 handle.write(html_text)
@@ -2380,13 +2416,6 @@ class DashboardDataPlotter(tk.Tk):
             messagebox.showerror("Report", f"Failed to export HTML:\n{exc}")
             return
         self.status.set(f"Exported report HTML: {out_path}")
-        if copy_errors:
-            messagebox.showwarning(
-                "Report export",
-                "Report HTML saved, but some assets could not be copied.\n\n"
-                + "\n".join(copy_errors)
-                + "\n\nClose any open preview tabs and export again to copy all assets.",
-            )
 
     def export_report_pdf(self) -> None:
         if not self.report_state:
@@ -2602,6 +2631,30 @@ class DashboardDataPlotter(tk.Tk):
         if arr.size == 0:
             return None
         return float(np.nanmin(arr)), float(np.nanmax(arr))
+
+    def _bar_label_decimals(self, values) -> int:
+        arr = np.asarray(values, dtype=float).ravel()
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            return 0
+        spread = float(np.nanmax(arr) - np.nanmin(arr))
+        max_abs = float(np.nanmax(np.abs(arr)))
+        scale = spread if spread > 0 else (max_abs if max_abs > 0 else 1.0)
+        resolution = max(scale / 200.0, 1e-9)
+        return int(np.clip(np.ceil(-np.log10(resolution)), 0, 6))
+
+    def _format_bar_value(self, value: float, decimals: int) -> str:
+        text = f"{float(value):.{decimals}f}"
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return text if text else "0"
+
+    def _bar_label_layout(self, labels: list[str]) -> tuple[int, float]:
+        longest = max((len(str(label)) for label in labels), default=0)
+        font_size = 8 if longest > 15 else 9
+        extra = max(0, longest - 15)
+        bottom_margin = min(0.22 + extra * 0.004, 0.42)
+        return font_size, bottom_margin
 
     def _on_plot_type_change(self):
         plot_type = self.plot_type_var.get()
@@ -3965,13 +4018,25 @@ class DashboardDataPlotter(tk.Tk):
 
         bar_colors = [color_map.get(self.state.display_to_id.get(
             label, ""), "#1f77b4") for label in data.labels]
+        decimals = self._bar_label_decimals(data.values)
+        text_values = [self._format_bar_value(v, decimals) for v in data.values]
+        longest_label = max((len(str(label)) for label in data.labels), default=0)
+        tick_font_size = 9 if longest_label <= 15 else 8
         fig = go.Figure()
-        fig.add_bar(x=data.labels, y=data.values, marker_color=bar_colors)
+        fig.add_bar(
+            x=data.labels,
+            y=data.values,
+            marker_color=bar_colors,
+            text=text_values,
+            textposition="outside",
+            cliponaxis=False,
+        )
         fig.update_layout(
             title=title,
             xaxis_title="Dataset",
             yaxis_title=y_title,
             xaxis_tickangle=-45,
+            xaxis=dict(automargin=True, tickfont=dict(size=tick_font_size)),
         )
         if fixed_range:
             fig.update_yaxes(range=[fixed_range[0], fixed_range[1]])
@@ -4717,9 +4782,17 @@ class DashboardDataPlotter(tk.Tk):
 
             bar_colors = [color_map.get(self.state.display_to_id.get(
                 label, ""), "#1f77b4") for label in data.labels]
-            self.ax.bar(x, data.values, color=bar_colors)
+            bars = self.ax.bar(x, data.values, color=bar_colors)
             self.ax.set_xticks(x)
-            self.ax.set_xticklabels(data.labels, rotation=45, ha="right")
+            tick_font_size, bottom_margin = self._bar_label_layout(data.labels)
+            self.ax.set_xticklabels(
+                data.labels,
+                rotation=45,
+                ha="right",
+                rotation_mode="anchor",
+                fontsize=tick_font_size,
+            )
+            self.fig.subplots_adjust(bottom=bottom_margin)
 
             mode_str = data.mode_label
             if data.compare:
@@ -4735,6 +4808,31 @@ class DashboardDataPlotter(tk.Tk):
 
             if fixed_range:
                 self.ax.set_ylim(fixed_range[0], fixed_range[1])
+
+            decimals = self._bar_label_decimals(data.values)
+            text_values = [self._format_bar_value(v, decimals) for v in data.values]
+            y_values = np.asarray(data.values, dtype=float)
+            y_span = float(np.nanmax(y_values) - np.nanmin(y_values)) if y_values.size else 0.0
+            y_max_abs = float(np.nanmax(np.abs(y_values))) if y_values.size else 0.0
+            y_offset = max(y_span * 0.02, y_max_abs * 0.015, 1e-6)
+            for bar, y_val, label_text in zip(bars, y_values, text_values):
+                x_pos = bar.get_x() + bar.get_width() / 2
+                if data.compare and y_val < 0:
+                    y_pos = 0.0 - y_offset
+                    va = "top"
+                else:
+                    y_pos = y_val + y_offset
+                    va = "bottom"
+                self.ax.text(
+                    x_pos,
+                    y_pos,
+                    label_text,
+                    ha="center",
+                    va=va,
+                    fontsize=8,
+                )
+            if not fixed_range:
+                self.ax.margins(y=0.14)
 
             self.ax.grid(True, axis="y", linestyle=":")
             low, high = self.ax.get_ylim()

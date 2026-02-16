@@ -1399,6 +1399,12 @@ class DashboardDataPlotter(tk.Tk):
             "offset_y": 8,
         }
 
+    def _is_valid_annotation_color(self, value: str) -> bool:
+        try:
+            return bool(value) and bool(matplotlib.colors.is_color_like(value))
+        except Exception:
+            return False
+
     def _normalize_annotation_format(self, obj) -> dict[str, object]:
         fmt = dict(self._default_annotation_format())
         if not isinstance(obj, dict):
@@ -1420,7 +1426,7 @@ class DashboardDataPlotter(tk.Tk):
 
         for key in ["text_color", "arrow_color"]:
             color = str(obj.get(key) or "").strip()
-            if color:
+            if color and self._is_valid_annotation_color(color):
                 fmt[key] = color
 
         for key in ["offset_x", "offset_y"]:

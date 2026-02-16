@@ -590,6 +590,7 @@ class DashboardDataPlotter(tk.Tk):
         dialog.transient(self)
         dialog.grab_set()
         dialog.geometry("720x640")
+        self._center_dialog(dialog)
 
         container = ttk.Frame(dialog, padding=10)
         container.pack(fill="both", expand=True)
@@ -614,6 +615,22 @@ class DashboardDataPlotter(tk.Tk):
 
         dialog.bind("<Escape>", lambda _e: dialog.destroy(), add=True)
         dialog.focus_set()
+
+    def _center_dialog(self, dialog: tk.Toplevel) -> None:
+        try:
+            dialog.update_idletasks()
+            self.update_idletasks()
+            width = dialog.winfo_width() or dialog.winfo_reqwidth()
+            height = dialog.winfo_height() or dialog.winfo_reqheight()
+            parent_x = self.winfo_rootx()
+            parent_y = self.winfo_rooty()
+            parent_w = self.winfo_width()
+            parent_h = self.winfo_height()
+            x = max(parent_x + (parent_w - width) // 2, 0)
+            y = max(parent_y + (parent_h - height) // 2, 0)
+            dialog.geometry(f"{width}x{height}+{x}+{y}")
+        except Exception:
+            return
 
     def _guide_repo_path(self) -> str:
         return os.path.normpath(
@@ -660,6 +677,7 @@ class DashboardDataPlotter(tk.Tk):
         dialog.transient(self)
         dialog.grab_set()
         dialog.geometry("760x680")
+        self._center_dialog(dialog)
 
         container = ttk.Frame(dialog, padding=10)
         container.pack(fill="both", expand=True)
@@ -1052,15 +1070,12 @@ class DashboardDataPlotter(tk.Tk):
         self.btn_clear_annotations = ttk.Button(
             report_btns2, text="Clear annotations", command=self.clear_annotations)
         self.btn_clear_annotations.grid(row=0, column=2, padx=(6, 0))
-        self.btn_annotation_format = ttk.Button(
-            report_btns2, text="Format…", command=self.configure_annotation_format)
-        self.btn_annotation_format.grid(row=0, column=3, padx=(6, 0))
         self.btn_export_report_html = ttk.Button(
             report_btns2, text="Export HTML...", command=self.export_report_html, width=12)
-        self.btn_export_report_html.grid(row=0, column=4, padx=(6, 0))
+        self.btn_export_report_html.grid(row=0, column=3, padx=(6, 0))
         self.btn_export_report_pdf = ttk.Button(
             report_btns2, text="Export PDF...", command=self.export_report_pdf, width=12)
-        self.btn_export_report_pdf.grid(row=0, column=5, padx=(6, 0))
+        self.btn_export_report_pdf.grid(row=0, column=4, padx=(6, 0))
 
         ttk.Label(left, textvariable=self.status, wraplength=380, foreground="#333").grid(
             row=21, column=0, sticky="w", pady=(10, 0))
@@ -1336,8 +1351,6 @@ class DashboardDataPlotter(tk.Tk):
             (self.chk_annotate, "Enable click-to-add text annotations on the plot."),
             (self.btn_clear_annotations,
              "Remove all annotations from the current plot."),
-            (self.btn_annotation_format,
-             "Set default text and arrow formatting for new annotations."),
         ]
         for widget, text in tips:
             ToolTip(widget, text)
@@ -1481,6 +1494,7 @@ class DashboardDataPlotter(tk.Tk):
         dialog.transient(self)
         dialog.grab_set()
         dialog.geometry("430x360")
+        self._center_dialog(dialog)
 
         container = ttk.Frame(dialog, padding=10)
         container.pack(fill="both", expand=True)
@@ -1607,17 +1621,166 @@ class DashboardDataPlotter(tk.Tk):
             return
         self._reset_annotations()
 
-    def _on_plot_click(self, event):
-        if not self.annotation_mode_var.get():
+    def _prompt_annotation_text(self, title: str, initial_text: str = "") -> str | None:
+        dialog = tk.Toplevel(self)
+        dialog.title(title)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry("420x260")
+        self._center_dialog(dialog)
+
+        container = ttk.Frame(dialog, padding=10)
+        container.pack(fill="both", expand=True)
+
+        ttk.Label(container, text="Annotation text:").pack(anchor="w")
+        text_widget = tk.Text(container, height=5, wrap="word")
+        text_widget.pack(fill="both", expand=True, pady=(2, 10))
+        if initial_text:
+            text_widget.insert("1.0", initial_text)
+
+        hint = ttk.Label(
+            container,
+            text="Format? updates the default font/arrow settings for new annotations.",
+            foreground="#555",
+        )
+        hint.pack(anchor="w")
+
+        btns = ttk.Frame(container)
+        btns.pack(fill="x", pady=(10, 0))
+        result = {"ok": False, "text": None}
+
+        def _confirm():
+            result["ok"] = True
+            result["text"] = text_widget.get("1.0", "end").strip()
+            dialog.destroy()
+
+        def _cancel():
+            dialog.destroy()
+
+        def _format():
+            self.configure_annotation_format()
+
+        ttk.Button(btns, text="Cancel", command=_cancel).pack(side="right")
+        ttk.Button(btns, text="Add", command=_confirm).pack(side="right", padx=(0, 6))
+        ttk.Button(btns, text="Format?", command=_format).pack(side="left")
+
+        dialog.bind("<Escape>", lambda _e: _cancel(), add=True)
+        dialog.protocol("WM_DELETE_WINDOW", _cancel)
+        text_widget.focus_set()
+        self.wait_window(dialog)
+
+        if not result["ok"]:
+            return None
+        text = result.get("text")
+        return text if text else None
+
+    def _prompt_annotation_edit(self, initial_text: str) -> tuple[str, str | None]:
+        dialog = tk.Toplevel(self)
+        dialog.title("Edit annotation")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry("420x240")
+        self._center_dialog(dialog)
+
+        container = ttk.Frame(dialog, padding=10)
+        container.pack(fill="both", expand=True)
+
+        ttk.Label(container, text="Annotation text:").pack(anchor="w")
+        text_widget = tk.Text(container, height=5, wrap="word")
+        text_widget.pack(fill="both", expand=True, pady=(2, 10))
+        if initial_text:
+            text_widget.insert("1.0", initial_text)
+
+        btns = ttk.Frame(container)
+        btns.pack(fill="x", pady=(10, 0))
+        result = {"action": "cancel", "text": None}
+
+        def _update():
+            result["action"] = "update"
+            result["text"] = text_widget.get("1.0", "end").strip()
+            dialog.destroy()
+
+        def _delete():
+            result["action"] = "delete"
+            dialog.destroy()
+
+        def _cancel():
+            dialog.destroy()
+
+        ttk.Button(btns, text="Cancel", command=_cancel).pack(side="right")
+        ttk.Button(btns, text="Update", command=_update).pack(side="right", padx=(0, 6))
+        ttk.Button(btns, text="Delete", command=_delete).pack(side="left")
+
+        dialog.bind("<Escape>", lambda _e: _cancel(), add=True)
+        dialog.protocol("WM_DELETE_WINDOW", _cancel)
+        text_widget.focus_set()
+        self.wait_window(dialog)
+
+        return result["action"], result["text"]
+
+    def _find_annotation_index(self, event) -> int | None:
+        for idx, artist in enumerate(list(self._annotation_artists)):
+            try:
+                contains, _ = artist.contains(event)
+            except Exception:
+                continue
+            if contains:
+                return idx
+        return None
+
+    def _remove_annotation_at(self, index: int) -> None:
+        if index < 0 or index >= len(self._annotation_artists):
             return
+        artist = self._annotation_artists.pop(index)
+        try:
+            artist.remove()
+        except Exception:
+            pass
+        if index < len(self._annotations):
+            self._annotations.pop(index)
+        self.canvas.draw_idle()
+
+    def _edit_annotation_at(self, index: int) -> None:
+        if index < 0 or index >= len(self._annotation_artists):
+            return
+        current_text = ""
+        if index < len(self._annotations):
+            current_text = str(self._annotations[index].get("text", ""))
+        else:
+            try:
+                current_text = str(self._annotation_artists[index].get_text())
+            except Exception:
+                current_text = ""
+        action, updated_text = self._prompt_annotation_edit(current_text)
+        if action == "delete":
+            self._remove_annotation_at(index)
+            return
+        if action != "update":
+            return
+        if not updated_text:
+            return
+        try:
+            self._annotation_artists[index].set_text(updated_text)
+        except Exception:
+            return
+        if index < len(self._annotations):
+            self._annotations[index]["text"] = updated_text
+        self.canvas.draw_idle()
+
+    def _on_plot_click(self, event):
         if self.use_plotly_var.get():
             return
         if event.inaxes != self.ax:
             return
+        existing_index = self._find_annotation_index(event)
+        if existing_index is not None:
+            self._edit_annotation_at(existing_index)
+            return
+        if not self.annotation_mode_var.get():
+            return
         if event.xdata is None or event.ydata is None:
             return
-        text = simpledialog.askstring(
-            "Add annotation", "Annotation text:", parent=self)
+        text = self._prompt_annotation_text("Add annotation")
         if not text:
             return
         fmt = self._annotation_format_payload()
@@ -1757,6 +1920,7 @@ class DashboardDataPlotter(tk.Tk):
         dialog.transient(self)
         dialog.grab_set()
         dialog.geometry("520x220")
+        self._center_dialog(dialog)
 
         container = ttk.Frame(dialog, padding=10)
         container.pack(fill="both", expand=True)
@@ -1863,6 +2027,7 @@ class DashboardDataPlotter(tk.Tk):
         dialog.transient(self)
         dialog.grab_set()
         dialog.geometry("520x360")
+        self._center_dialog(dialog)
 
         container = ttk.Frame(dialog, padding=10)
         container.pack(fill="both", expand=True)

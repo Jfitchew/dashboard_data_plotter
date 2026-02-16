@@ -354,16 +354,17 @@ class DashboardDataPlotter(tk.Tk):
             except OSError:
                 pass
 
+        packaged_path = self._changelog_packaged_path()
+        if packaged_path and os.path.isfile(packaged_path):
+            return packaged_path
+
         candidate_paths = [
             user_path,
             self._changelog_repo_path(),
-            self._changelog_packaged_path(),
         ]
-        packaged_path = self._changelog_packaged_path()
         for path in candidate_paths:
             if path and os.path.isfile(path):
-                if path != packaged_path:
-                    self._update_changelog_from_git(path)
+                self._update_changelog_from_git(path)
                 return path
 
         try:

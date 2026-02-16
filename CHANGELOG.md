@@ -65,5 +65,3 @@
   - 3.20.55 - 2026-02-11 - Fix HTML/PDF export default filenames to avoid double .rep.
   - 3.20.56 - 2026-02-11 - Bundle GUIDE.md and CHANGELOG.md in PyInstaller builds.
   - 3.20.57 - 2026-02-11 - Allow report export to succeed when assets are locked; warn instead.
-  - 3.20.58 - 2026-02-11 - Export report HTML as a standalone file with embedded assets.
-  - 3.20.59 - 2026-02-11 - Packaged builds always use bundled CHANGELOG.md instead of user cache.

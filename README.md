@@ -137,13 +137,15 @@ change if datasets later change.
 
 Report workflow:
 1. Plot a chart.
-2. (Optional) Toggle **Annotate** and click the plot to add text annotations.
-3. Click **Add snapshot...** to include the plot and comments in the report.
-4. Use **Export HTML...** or **Export PDF...** to share with clients.
+2. (Optional) Click **Format…** to set annotation style defaults (font, bold/italic, colours, and caption offset from the selected point).
+3. (Optional) Toggle **Annotate** and click the plot to add text annotations using the current format.
+4. Click **Add snapshot...** to include the plot and comments in the report.
+5. Use **Export HTML...** or **Export PDF...** to share with clients.
 
 Report files are stored as JSON (default extension `.rep.json`) and create a sibling `*_assets` folder with the snapshot files.
 PDF export uses the optional `weasyprint` dependency; if it is not installed, the app will prompt you.
 Snapshot comments accept basic Markdown (bold, italics, bullet lists).
+Annotation format defaults are stored with the report (`annotation_format`) and are also persisted in project settings so new reports created from that project can reuse the last chosen style.
 
 ---
 

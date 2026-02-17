@@ -158,7 +158,7 @@ class DashboardDataPlotter(tk.Tk):
         self._project_dirty = False
         self._suspend_dirty = False
         self._update_title_bar()
-        self.geometry("1360x876")
+        self.geometry("1500x876")
         self._init_styles()
 
         # Internal storage:
@@ -199,6 +199,11 @@ class DashboardDataPlotter(tk.Tk):
         self.compare_var = tk.BooleanVar(value=False)
         self.baseline_display_var = tk.StringVar(value="")
         self.baseline_multi_displays: list[str] = []
+        self.baseline_menu_var = tk.StringVar(value="Select baseline")
+        self._baseline_menu_vars: dict[str, tk.BooleanVar] = {}
+        self._baseline_menu_displays: list[str] = []
+        self._baseline_popup: tk.Toplevel | None = None
+        self._baseline_popup_binding = None
 
         # Plot history
         self._history = []
@@ -236,6 +241,7 @@ class DashboardDataPlotter(tk.Tk):
             style.configure("OutlierRow.TFrame", background=salmon)
             style.configure("OutlierRow.TLabel", background=salmon)
             style.configure("OutlierRow.TCheckbutton", background=salmon)
+            style.configure("Baseline.TMenubutton", background="white")
         except Exception:
             pass
 
@@ -709,7 +715,8 @@ class DashboardDataPlotter(tk.Tk):
     # ---------------- UI ----------------
     def _build_ui(self):
         self.columnconfigure(0, weight=0)
-        self.columnconfigure(1, weight=1)
+        self.columnconfigure(1, weight=2)
+        self.columnconfigure(0, minsize=420)
         self.rowconfigure(0, weight=1)
 
         left = ttk.Frame(self, padding=10)
@@ -996,13 +1003,10 @@ class DashboardDataPlotter(tk.Tk):
             comp_row, text="Difference vs Baseline:", variable=self.compare_var,
             command=self._on_compare_toggle)
         self.chk_compare.grid(row=0, column=1, sticky="w", padx=(12, 0))
-        self.baseline_combo = ttk.Combobox(
-            comp_row, textvariable=self.baseline_display_var,
-            values=[], state="readonly", width=30)
-        self.baseline_combo.grid(row=0, column=2, sticky="w", padx=(8, 0))
-        self.baseline_multi_btn = ttk.Button(
-            comp_row, text="Select...", command=self._open_baseline_multi_select, width=9)
-        self.baseline_multi_btn.grid(row=0, column=3, sticky="w", padx=(6, 0))
+        self.baseline_menu_btn = ttk.Button(
+            comp_row, textvariable=self.baseline_menu_var, width=34, command=self._toggle_baseline_popup)
+        self.baseline_menu_btn.configure(style="Baseline.TMenubutton")
+        self.baseline_menu_btn.grid(row=0, column=2, sticky="w", padx=(8, 0))
 
         ttk.Separator(left).grid(row=16, column=0, sticky="ew", pady=6)
 
@@ -1240,8 +1244,6 @@ class DashboardDataPlotter(tk.Tk):
         self.refresh_metric_choices()
         if desired_metric and desired_metric in self.metric_combo["values"]:
             self.metric_var.set(desired_metric)
-        self.refresh_baseline_choices()
-
         baseline_display = ""
         if plot.baseline_source_id:
             baseline_display = self.state.id_to_display.get(
@@ -1256,6 +1258,8 @@ class DashboardDataPlotter(tk.Tk):
         ]
         if not self.baseline_multi_displays and baseline_display:
             self.baseline_multi_displays = [baseline_display]
+
+        self.refresh_baseline_choices()
 
         self._sync_treeview_from_state()
         self._on_plot_type_change()
@@ -1352,7 +1356,7 @@ class DashboardDataPlotter(tk.Tk):
              "Plot values as percent of dataset mean (radar/cartesian only)."),
             (self.chk_compare,
              "Plot each dataset as a difference from the selected baseline."),
-            (self.baseline_combo, "Choose the baseline dataset for comparison mode."),
+            (self.baseline_menu_btn, "Choose one or more baseline datasets for comparison mode."),
             (self.plot_btn, "Plot or refresh using current settings."),
             (self.export_plot_btn, "Export the currently displayed plot data to CSV."),
             (self.prev_btn, "Go to the previous plot in history."),
@@ -2557,9 +2561,10 @@ class DashboardDataPlotter(tk.Tk):
 
     # ---------------- UI state helpers ----------------
     def _set_compare_controls_state(self):
-        state = "readonly" if self.compare_var.get() else "disabled"
-        self.baseline_combo.configure(state=state)
-        self.baseline_multi_btn.configure(state="normal" if self.compare_var.get() else "disabled")
+        state = "normal" if self.compare_var.get() else "disabled"
+        self.baseline_menu_btn.configure(state=state)
+        if not self.compare_var.get():
+            self._close_baseline_popup()
 
     def _set_plot_type_controls_state(self):
         plot_type = (self.plot_type_var.get() or "radar").strip().lower()
@@ -3398,17 +3403,21 @@ class DashboardDataPlotter(tk.Tk):
     def _delete_history_entry(self):
         if not (0 <= self._history_index < len(self._history)):
             return
-        confirm = messagebox.askyesno(
-            "Delete history entry",
-            "Delete the current plot settings from history?",
-        )
-        if not confirm:
-            return
         self._history.pop(self._history_index)
         if self._history_index >= len(self._history):
             self._history_index = len(self._history) - 1
         self._update_history_buttons()
         self._mark_dirty()
+        if self._history_index < 0:
+            self._redraw_empty()
+            return
+        snap = self._history[self._history_index]
+        self._restoring_history = True
+        try:
+            self._apply_snapshot(snap)
+            self.plot()
+        finally:
+            self._restoring_history = False
 
     def _clear_history(self):
         if not self._history:
@@ -3811,7 +3820,6 @@ class DashboardDataPlotter(tk.Tk):
 
     def refresh_baseline_choices(self):
         displays = [self.state.id_to_display.get(sid, sid) for sid in ordered_source_ids(self.state)]
-        self.baseline_combo["values"] = displays
         cur = self.baseline_display_var.get()
         if cur and cur not in self.state.display_to_id:
             self.baseline_display_var.set(displays[0] if displays else "")
@@ -3820,6 +3828,215 @@ class DashboardDataPlotter(tk.Tk):
         self.baseline_multi_displays = [name for name in self.baseline_multi_displays if name in displays]
         if not self.baseline_multi_displays and self.baseline_display_var.get() in displays:
             self.baseline_multi_displays = [self.baseline_display_var.get()]
+        self._rebuild_baseline_menu(displays)
+
+    def _baseline_menu_label(self) -> str:
+        if not self.baseline_multi_displays:
+            return "Select baseline"
+        if len(self.baseline_multi_displays) == 1:
+            return self.baseline_multi_displays[0]
+        return f"Baselines ({len(self.baseline_multi_displays)})"
+
+    def _update_baseline_menu_label(self) -> None:
+        if hasattr(self, "baseline_menu_var"):
+            self.baseline_menu_var.set(self._baseline_menu_label())
+
+    def _toggle_baseline_popup(self, _event=None) -> None:
+        if self._baseline_popup is not None:
+            self._close_baseline_popup()
+            return
+        self._open_baseline_popup()
+
+    def _open_baseline_popup(self) -> None:
+        if self._baseline_popup is not None:
+            return
+        if not self.compare_var.get():
+            return
+        if not self._baseline_menu_displays:
+            self.refresh_baseline_choices()
+        if not self._baseline_menu_displays:
+            return
+        popup = tk.Toplevel(self)
+        popup.overrideredirect(True)
+        popup.transient(self)
+        popup.configure(background="white")
+        popup.bind("<Escape>", lambda _e: self._close_baseline_popup(), add=True)
+        popup.bind("<FocusOut>", lambda _e: self._close_baseline_popup(), add=True)
+        self._baseline_popup = popup
+
+        container = tk.Frame(popup, background="white", borderwidth=1, relief="solid")
+        container.pack(fill="both", expand=True)
+        canvas = tk.Canvas(container, background="white", highlightthickness=0)
+        scrollbar = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        frame = tk.Frame(canvas, background="white")
+        window_id = canvas.create_window((0, 0), window=frame, anchor="nw")
+
+        def _on_frame_config(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfigure(window_id, width=canvas.winfo_width())
+
+        frame.bind("<Configure>", _on_frame_config)
+        canvas.bind("<Configure>", _on_frame_config)
+        for name in self._baseline_menu_displays:
+            var = self._baseline_menu_vars.get(name)
+            if var is None:
+                var = tk.BooleanVar(value=name in self.baseline_multi_displays)
+                self._baseline_menu_vars[name] = var
+            cb = tk.Checkbutton(
+                frame,
+                text=name,
+                variable=var,
+                background="white",
+                activebackground="#f0f0f0",
+                anchor="w",
+                command=self._on_baseline_menu_toggle,
+            )
+            cb.pack(fill="x", padx=8, pady=2)
+
+        self._position_baseline_popup(popup)
+        popup.lift()
+        try:
+            popup.attributes("-topmost", True)
+            popup.attributes("-topmost", False)
+        except Exception:
+            pass
+        popup.after(1, popup.focus_set)
+        popup.after(50, self._bind_baseline_click_away)
+
+    def _position_baseline_popup(self, popup: tk.Toplevel) -> None:
+        self.update_idletasks()
+        popup.update_idletasks()
+        btn_root_x = self.baseline_menu_btn.winfo_rootx()
+        btn_root_y = self.baseline_menu_btn.winfo_rooty()
+        if btn_root_x == 0 and btn_root_y == 0:
+            btn_root_x = self.winfo_rootx() + self.baseline_menu_btn.winfo_x()
+            btn_root_y = self.winfo_rooty() + self.baseline_menu_btn.winfo_y()
+        x = btn_root_x
+        y = btn_root_y + self.baseline_menu_btn.winfo_height()
+        width = max(self.baseline_menu_btn.winfo_width(), popup.winfo_reqwidth())
+        height = min(popup.winfo_reqheight(), 260)
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        if x + width > screen_w:
+            x = max(0, screen_w - width - 10)
+        if y + height > screen_h:
+            y = max(0, btn_root_y - height)
+        popup.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _close_baseline_popup(self) -> None:
+        if self._baseline_popup is None:
+            return
+        try:
+            if self._baseline_popup_binding is not None:
+                self.unbind_all("<Button-1>")
+                self._baseline_popup_binding = None
+            self._baseline_popup.destroy()
+        except Exception:
+            pass
+        self._baseline_popup = None
+
+    def _bind_baseline_click_away(self) -> None:
+        if self._baseline_popup is None:
+            return
+        if self._baseline_popup_binding is not None:
+            return
+        self._baseline_popup_binding = self.bind_all(
+            "<Button-1>",
+            self._on_baseline_popup_click_away,
+            add=True,
+        )
+
+    def _on_baseline_popup_click_away(self, event) -> None:
+        popup = self._baseline_popup
+        if popup is None:
+            return
+        widget = event.widget
+        if widget is popup or widget.winfo_toplevel() is popup:
+            return
+        if widget is self.baseline_menu_btn:
+            return
+        self._close_baseline_popup()
+
+    def _baseline_label_for_title(self, baseline_display: str) -> str:
+        if len(self.baseline_multi_displays) > 1:
+            return "multiple datasets"
+        return baseline_display
+
+    def _baseline_label_for_legend(self, baseline_display: str) -> str:
+        if len(self.baseline_multi_displays) > 1:
+            return "Baseline (multiple datasets)"
+        return baseline_display
+
+    def _apply_top_legend(self, handles, labels, font_size: int = 9) -> None:
+        if not handles:
+            return
+        if getattr(self.ax, "legend_", None) is not None:
+            try:
+                self.ax.legend_.remove()
+            except Exception:
+                pass
+        self.ax.legend(
+            handles,
+            labels,
+            loc="upper left",
+            bbox_to_anchor=(1.02, 1.0),
+            fontsize=font_size,
+            frameon=False,
+        )
+
+    def _apply_plotly_legend_layout(self, fig: go.Figure) -> None:
+        fig.update_layout(
+            legend=dict(
+                orientation="v",
+                yanchor="top",
+                y=1.0,
+                xanchor="left",
+                x=1.02,
+            ),
+            title=dict(x=0.5, xanchor="center", y=0.99, yanchor="top"),
+            margin=dict(l=60, r=140, t=60, b=60),
+        )
+
+    def _set_plot_title(self, title: str, *, pad: int = 2, y: float = 1.02) -> None:
+        self.ax.set_title(title, pad=pad, y=y)
+
+    def _rebuild_baseline_menu(self, displays: list[str]) -> None:
+        self._baseline_menu_vars = {}
+        self._baseline_menu_displays = list(displays)
+        if not displays:
+            self._update_baseline_menu_label()
+            self._close_baseline_popup()
+            return
+        for name in displays:
+            var = tk.BooleanVar(value=name in self.baseline_multi_displays)
+            self._baseline_menu_vars[name] = var
+        self._update_baseline_menu_label()
+        if self._baseline_popup is not None:
+            self._close_baseline_popup()
+            self._open_baseline_popup()
+
+    def _on_baseline_menu_toggle(self) -> None:
+        if not self._baseline_menu_displays:
+            return
+        prev = list(self.baseline_multi_displays)
+        picked = [
+            name
+            for name in self._baseline_menu_displays
+            if self._baseline_menu_vars.get(name) and self._baseline_menu_vars[name].get()
+        ]
+        if not picked:
+            messagebox.showinfo("Selection required", "Select at least one baseline dataset.")
+            picked = prev or self._baseline_menu_displays[:1]
+            for name, var in self._baseline_menu_vars.items():
+                var.set(name in picked)
+        self.baseline_multi_displays = picked
+        if picked:
+            self.baseline_display_var.set(picked[0])
+        self._update_baseline_menu_label()
+        self._sync_state_settings_from_ui()
 
     def _open_baseline_multi_select(self):
         if not self.compare_var.get():
@@ -3862,6 +4079,35 @@ class DashboardDataPlotter(tk.Tk):
 
     # ---------------- Project lifecycle ----------------
     def _reset_project_state(self):
+        self._close_baseline_popup()
+        self._last_plotly_fig = None
+        self._last_plotly_title = ""
+        self.report_state = None
+        self._report_dirty = False
+        self.report_path = ""
+        self.project_title = "Untitled Project"
+        self.project_path = ""
+        self.plot_type_var.set("radar")
+        self.value_mode_var.set("absolute")
+        self.compare_var.set(False)
+        self.baseline_display_var.set("")
+        self.baseline_multi_displays = []
+        self.angle_var.set("leftPedalCrankAngle")
+        self.metric_var.set("")
+        self.agg_var.set("median")
+        self.close_loop_var.set(True)
+        self.use_plotly_var.set(False)
+        self.radar_background_var.set(True)
+        self.range_low_var.set("")
+        self.range_high_var.set("")
+        self.range_fixed_var.set(False)
+        self.use_original_binned_var.set(False)
+        self.remove_outliers_var.set(False)
+        self.outlier_method_var.set("Impulse")
+        self.outlier_thresh_var.set("4.0")
+        self.show_outliers_var.set(False)
+        self.outlier_warnings_var.set(True)
+        self.sentinels_var.set(DEFAULT_SENTINELS)
         for iid in self.files_tree.get_children(""):
             self.files_tree.delete(iid)
         self.state.clear()
@@ -3874,6 +4120,9 @@ class DashboardDataPlotter(tk.Tk):
         self._refresh_angle_choices()
         self._auto_default_metric()
         self._redraw_empty()
+        self._set_plot_type_controls_state()
+        self._set_compare_controls_state()
+        self._update_outlier_show_state()
 
     def new_project(self):
         if not self._prompt_save_if_dirty("starting a new project"):
@@ -3968,6 +4217,9 @@ class DashboardDataPlotter(tk.Tk):
         if not out_path:
             return False
         try:
+            new_title = os.path.splitext(os.path.basename(out_path))[0].strip()
+            if new_title:
+                self.project_title = new_title
             self.state.analysis_settings.report_options["annotation_format"] = json.dumps(
                 self._annotation_format_payload()
             )
@@ -3985,6 +4237,7 @@ class DashboardDataPlotter(tk.Tk):
                 json.dump(payload, handle, indent=2)
             self.project_path = out_path
             self._clear_dirty()
+            self._update_title_bar()
             self.status.set(f"Saved project to: {out_path}")
             if self.report_state and self._report_dirty:
                 save_report = messagebox.askyesno(
@@ -4079,7 +4332,8 @@ class DashboardDataPlotter(tk.Tk):
         if data.compare:
             b_label = data.baseline_label or self.state.id_to_display.get(
                 baseline_id, baseline_display)
-            title = f"{data.agg_label} {metric_col} difference vs baseline {b_label} ({mode_str})"
+            b_label_title = self._baseline_label_for_title(b_label)
+            title = f"{data.agg_label} {metric_col} difference vs baseline {b_label_title} ({mode_str})"
             y_title = "Difference vs baseline"
         else:
             title = f"{data.agg_label} {metric_col} per dataset ({mode_str})"
@@ -4107,6 +4361,7 @@ class DashboardDataPlotter(tk.Tk):
             xaxis_tickangle=-45,
             xaxis=dict(automargin=True, tickfont=dict(size=tick_font_size)),
         )
+        self._apply_plotly_legend_layout(fig)
         if fixed_range:
             fig.update_yaxes(range=[fixed_range[0], fixed_range[1]])
         fig.add_shape(type="line", x0=-0.5, x1=max(len(data.labels) - 0.5, 0.5),
@@ -4192,7 +4447,8 @@ class DashboardDataPlotter(tk.Tk):
             base_title = f"Time series {metric_col} ({mode_str})"
 
         if data.compare and data.baseline_label:
-            title = f"{base_title} difference to Baseline ({data.baseline_label})"
+            b_label_title = self._baseline_label_for_title(data.baseline_label)
+            title = f"{base_title} difference to Baseline ({b_label_title})"
             y_title = "Difference vs baseline"
         else:
             title = base_title
@@ -4205,8 +4461,9 @@ class DashboardDataPlotter(tk.Tk):
                 self._update_range_entries(*range_minmax)
 
         if data.compare and data.baseline_label:
+            baseline_legend_label = self._baseline_label_for_legend(data.baseline_label)
             fig.add_scatter(
-                x=[0, data.max_x], y=[0, 0], mode="lines", name=data.baseline_label,
+                x=[0, data.max_x], y=[0, 0], mode="lines", name=baseline_legend_label,
                 line=dict(color=baseline_color, width=1.6), showlegend=True)
 
         fig.update_layout(
@@ -4215,6 +4472,7 @@ class DashboardDataPlotter(tk.Tk):
             yaxis_title=y_title,
             showlegend=True,
         )
+        self._apply_plotly_legend_layout(fig)
         if fixed_range:
             fig.update_yaxes(range=[fixed_range[0], fixed_range[1]])
 
@@ -4284,10 +4542,12 @@ class DashboardDataPlotter(tk.Tk):
         if data.compare:
             b_label = data.baseline_label or self.state.id_to_display.get(
                 baseline_id, baseline_display)
+            b_label_title = self._baseline_label_for_title(b_label)
+            baseline_legend_label = self._baseline_label_for_legend(b_label)
             fig.add_scatter(
-                x=[0, 360], y=[0, 0], mode="lines", name=b_label,
+                x=[0, 360], y=[0, 0], mode="lines", name=baseline_legend_label,
                 line=dict(color=baseline_color, width=1.8), showlegend=True)
-            title = f"{data.agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})"
+            title = f"{data.agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label_title})"
             y_title = "Difference vs baseline"
         else:
             title = f"{data.agg_label} {metric_col} ({mode_str})"
@@ -4305,6 +4565,7 @@ class DashboardDataPlotter(tk.Tk):
             yaxis_title=y_title,
             showlegend=True,
         )
+        self._apply_plotly_legend_layout(fig)
         if fixed_range:
             fig.update_yaxes(range=[fixed_range[0], fixed_range[1]])
 
@@ -4345,13 +4606,17 @@ class DashboardDataPlotter(tk.Tk):
                 "Nothing to plot", "No datasets produced valid radar values.")
             return
 
+        baseline_legend_label = ""
+        if data.compare and data.baseline_label:
+            baseline_legend_label = self._baseline_label_for_legend(data.baseline_label)
         for trace in data.traces:
             color = color_map.get(trace.source_id, "#1f77b4")
+            label = baseline_legend_label if trace.is_baseline and baseline_legend_label else trace.label
             fig.add_scatterpolar(
                 r=trace.y,
                 theta=trace.x,
                 mode="lines+markers",
-                name=trace.label,
+                name=label,
                 marker=dict(size=4, color=color),
                 line=dict(color=color, width=1.5),
             )
@@ -4378,7 +4643,8 @@ class DashboardDataPlotter(tk.Tk):
         if data.compare:
             b_label = data.baseline_label or self.state.id_to_display.get(
                 baseline_id, baseline_display)
-            title = f"{data.agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})"
+            b_label_title = self._baseline_label_for_title(b_label)
+            title = f"{data.agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label_title})"
         else:
             title = f"{data.agg_label} {metric_col} ({mode_str})"
 
@@ -4389,6 +4655,7 @@ class DashboardDataPlotter(tk.Tk):
                 angularaxis=dict(direction="clockwise", rotation=90),
             ),
         )
+        self._apply_plotly_legend_layout(fig)
         if fixed_range:
             fig.update_polars(radialaxis=dict(
                 range=[fixed_range[0], fixed_range[1]]))
@@ -4768,9 +5035,11 @@ class DashboardDataPlotter(tk.Tk):
                 base_title = f"Time series {metric_col} ({mode_str})"
 
             if data.compare and data.baseline_label:
+                baseline_legend_label = self._baseline_label_for_legend(data.baseline_label)
+                b_label_title = self._baseline_label_for_title(data.baseline_label)
                 self.ax.plot([0, data.max_x], [0, 0], color=baseline_color,
-                             linewidth=1.6, label=data.baseline_label)
-                title = f"{base_title} difference to Baseline ({data.baseline_label})"
+                             linewidth=1.6, label=baseline_legend_label)
+                title = f"{base_title} difference to Baseline ({b_label_title})"
                 y_title = "Difference vs baseline"
             else:
                 title = base_title
@@ -4782,13 +5051,14 @@ class DashboardDataPlotter(tk.Tk):
                 if range_minmax:
                     self._update_range_entries(*range_minmax)
 
-            self.ax.set_title(title)
+            self._set_plot_title(title)
             self.ax.set_xlabel(data.x_label)
             self.ax.set_ylabel(y_title)
             self.ax.grid(True, linestyle=":")
             if plotted:
-                self.ax.legend(loc="upper left", bbox_to_anchor=(
-                    1.01, 1.02), fontsize=9, frameon=False)
+                self.fig.subplots_adjust(left=0.08, right=0.78, top=0.9, bottom=0.1)
+                handles, labels = self.ax.get_legend_handles_labels()
+                self._apply_top_legend(handles, labels, font_size=9)
 
             if fixed_range:
                 self.ax.set_ylim(fixed_range[0], fixed_range[1])
@@ -4880,12 +5150,15 @@ class DashboardDataPlotter(tk.Tk):
             if data.compare:
                 b_label = data.baseline_label or self.state.id_to_display.get(
                     baseline_id, baseline_display)
-                self.ax.set_title(
-                    f"{data.agg_label} {metric_col} difference vs baseline {b_label} ({mode_str})")
+                b_label_title = self._baseline_label_for_title(b_label)
+                self._set_plot_title(
+                    f"{data.agg_label} {metric_col} difference vs baseline {b_label_title} ({mode_str})"
+                )
                 self.ax.set_ylabel("Difference vs baseline")
             else:
-                self.ax.set_title(
-                    f"{data.agg_label} {metric_col} per dataset ({mode_str})")
+                self._set_plot_title(
+                    f"{data.agg_label} {metric_col} per dataset ({mode_str})"
+                )
                 self.ax.set_ylabel(metric_col)
 
             if fixed_range:
@@ -5009,16 +5282,20 @@ class DashboardDataPlotter(tk.Tk):
             if data.compare:
                 b_label = data.baseline_label or self.state.id_to_display.get(
                     baseline_id, baseline_display)
-                self.ax.set_title(
-                    f"{data.agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})")
+                b_label_title = self._baseline_label_for_title(b_label)
+                baseline_legend_label = self._baseline_label_for_legend(b_label)
+                self._set_plot_title(
+                    f"{data.agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label_title})"
+                )
                 self.ax.set_ylabel("Difference vs baseline")
             else:
-                self.ax.set_title(
-                    f"{data.agg_label} {metric_col} ({mode_str})")
+                self._set_plot_title(
+                    f"{data.agg_label} {metric_col} ({mode_str})"
+                )
                 self.ax.set_ylabel(metric_col)
 
             if plotted:
-                self.fig.subplots_adjust(left=0.1, right=0.84)
+                self.fig.subplots_adjust(left=0.08, right=0.78, top=0.9, bottom=0.1)
                 handles, labels = self.ax.get_legend_handles_labels()
                 if compare and baseline_label and baseline_handle and baseline_handle not in handles:
                     handles.append(baseline_handle)
@@ -5027,10 +5304,12 @@ class DashboardDataPlotter(tk.Tk):
                     idx = handles.index(baseline_handle)
                     handles.insert(0, handles.pop(idx))
                     labels.insert(0, labels.pop(idx))
-                self.ax.legend(
-                    handles, labels,
-                    loc="upper left", bbox_to_anchor=(1.01, 1.02),
-                    fontsize=9, frameon=False)
+                if compare and baseline_label:
+                    labels = [
+                        baseline_legend_label if label == baseline_label else label
+                        for label in labels
+                    ]
+                self._apply_top_legend(handles, labels, font_size=9)
 
             if fixed_range:
                 self.ax.set_ylim(fixed_range[0], fixed_range[1])
@@ -5129,12 +5408,22 @@ class DashboardDataPlotter(tk.Tk):
         if data.compare:
             b_label = data.baseline_label or self.state.id_to_display.get(
                 baseline_id, baseline_display)
-            self.ax.set_title(
-                f"{data.agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label})", pad=18)
+            b_label_title = self._baseline_label_for_title(b_label)
+            baseline_legend_label = self._baseline_label_for_legend(b_label)
+            self._set_plot_title(
+                f"{data.agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label_title})",
+                pad=8,
+                y=1.08,
+            )
             self.ax.grid(True)
-            self.ax.legend(loc="upper left", bbox_to_anchor=(
-                1.02, 1.05), fontsize=9, frameon=False)
-            self.ax.set_position([0.05, 0.03, 0.8, 0.85])
+            handles, labels = self.ax.get_legend_handles_labels()
+            labels = [
+                baseline_legend_label if label == b_label else label
+                for label in labels
+            ]
+            self.fig.subplots_adjust(left=0.06, right=0.76, top=0.92, bottom=0.08)
+            self._apply_top_legend(handles, labels, font_size=9)
+            self.ax.set_position([0.06, 0.08, 0.68, 0.8])
             if fixed_range:
                 self.ax.set_rlim(data.offset + fixed_range[0],
                                  data.offset + fixed_range[1])
@@ -5145,13 +5434,17 @@ class DashboardDataPlotter(tk.Tk):
             self._update_range_entries(low - data.offset, high - data.offset)
             fmt_delta_ticks(self.ax, data.offset)
         else:
-            self.ax.set_title(
-                f"{data.agg_label} {metric_col} ({mode_str})", pad=18)
+            self._set_plot_title(
+                f"{data.agg_label} {metric_col} ({mode_str})",
+                pad=8,
+                y=1.08,
+            )
             self.ax.grid(True)
-            self.ax.set_position([0.05, 0.05, 0.75, 0.80])
+            self.fig.subplots_adjust(left=0.06, right=0.76, top=0.92, bottom=0.08)
+            self.ax.set_position([0.06, 0.08, 0.68, 0.8])
             if plotted:
-                self.ax.legend(loc="upper right", bbox_to_anchor=(
-                    1.25, 1.1), fontsize=9, frameon=False)
+                handles, labels = self.ax.get_legend_handles_labels()
+                self._apply_top_legend(handles, labels, font_size=9)
             if fixed_range:
                 self.ax.set_rlim(fixed_range[0], fixed_range[1])
             else:

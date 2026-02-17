@@ -94,6 +94,7 @@ but the app is tolerant of missing or sparse data.
 
 When comparison mode is enabled:
 - One or more **baseline datasets** can be selected
+- In the Tkinter UI, baselines are chosen from a multi-select dropdown
 - The selected baselines are averaged using the current aggregation mode and value mode
 - Radar plots:
   - Baseline drawn as a **zero reference ring**

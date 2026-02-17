@@ -65,3 +65,21 @@
   - 3.20.55 - 2026-02-11 - Fix HTML/PDF export default filenames to avoid double .rep.
   - 3.20.56 - 2026-02-11 - Bundle GUIDE.md and CHANGELOG.md in PyInstaller builds.
   - 3.20.57 - 2026-02-11 - Allow report export to succeed when assets are locked; warn instead.
+  - 3.20.58 - 2026-02-11 - Export report HTML as a standalone file with embedded assets.
+  - 3.20.59 - 2026-02-16 - Added multi-baseline comparison selection and averaged baseline logic for radar, cartesian, bar, and time-series plots.
+  - 3.20.60 - 2026-02-16 - Moved baseline multi-selection into the comparison dropdown menu.
+  - 3.20.61 - 2026-02-16 - Updated baseline labels and legend layout; reduced plot whitespace and set baseline menu background to white.
+  - 3.20.62 - 2026-02-16 - Adjusted legend placement and title spacing to keep legends above plots without overlap.
+  - 3.20.63 - 2026-02-16 - Restored right-side legends and widened plot panel to make room for them.
+  - 3.20.64 - 2026-02-16 - Lifted radar titles to avoid overlap with angle labels.
+  - 3.20.65 - 2026-02-16 - Kept baseline multi-select dropdown open until focus leaves it.
+  - 3.20.66 - 2026-02-16 - Fixed baseline multi-select button to reopen the dropdown reliably.
+  - 3.20.67 - 2026-02-16 - Stabilized baseline dropdown focus/visibility handling.
+  - 3.20.68 - 2026-02-16 - Removed blocking grab from baseline dropdown and closed it on click-away.
+  - 3.20.69 - 2026-02-16 - Prevented baseline dropdown from closing immediately on mouse release.
+  - 3.20.70 - 2026-02-16 - Reworked baseline dropdown click-away handling to keep items visible.
+  - 3.20.71 - 2026-02-16 - Positioned baseline dropdown near the control and made it scrollable.
+  - 3.20.72 - 2026-02-16 - Reset plot/UI state before loading a new project to avoid stale plot errors.
+  - 3.20.73 - 2026-02-16 - Update project title to match the saved filename.
+  - 3.20.74 - 2026-02-16 - Delete history entries without confirmation and render the previous plot.
+  - 3.20.75 - 2026-02-16 - Fix Plotly radar call to pass baseline_ids.

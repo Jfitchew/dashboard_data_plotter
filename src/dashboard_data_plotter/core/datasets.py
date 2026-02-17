@@ -51,6 +51,16 @@ def remove_dataset(state: ProjectState, source_id: str) -> None:
         state.dataset_order.remove(source_id)
     if state.plot_settings.baseline_source_id == source_id:
         state.plot_settings.baseline_source_id = ""
+    if source_id in state.plot_settings.baseline_source_ids:
+        state.plot_settings.baseline_source_ids = [
+            sid for sid in state.plot_settings.baseline_source_ids if sid != source_id
+        ]
+        if state.plot_settings.baseline_source_id not in state.plot_settings.baseline_source_ids:
+            state.plot_settings.baseline_source_id = (
+                state.plot_settings.baseline_source_ids[0]
+                if state.plot_settings.baseline_source_ids
+                else ""
+            )
 
 
 def rename_dataset(state: ProjectState, source_id: str, new_name: str) -> str:

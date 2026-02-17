@@ -4962,7 +4962,7 @@ class DashboardDataPlotter(tk.Tk):
                 return
             self._plot_plotly_radar(
                 angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
-                compare, baseline_id, baseline_display, fixed_range)
+                compare, baseline_id, baseline_ids, baseline_display, fixed_range)
             self._push_history()
             self._warn_outliers_if_needed(
                 plot_type, angle_col, metric_col, sentinels, compare, baseline_id)

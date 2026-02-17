@@ -82,3 +82,4 @@
   - 3.20.72 - 2026-02-16 - Reset plot/UI state before loading a new project to avoid stale plot errors.
   - 3.20.73 - 2026-02-16 - Update project title to match the saved filename.
   - 3.20.74 - 2026-02-16 - Delete history entries without confirmation and render the previous plot.
+  - 3.20.75 - 2026-02-16 - Fix Plotly radar call to pass baseline_ids.

@@ -7,6 +7,7 @@ import os
 import sys
 from typing import List, Tuple
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -32,8 +33,10 @@ from dashboard_data_plotter.core.plotting import (
 from dashboard_data_plotter.data.loaders import (
     DEFAULT_SENTINELS,
     extract_named_datasets,
+    filter_outliers_mad,
     make_unique_name,
     parse_sentinels,
+    sanitize_numeric,
 )
 
 
@@ -318,6 +321,94 @@ def _render_dataset_controls() -> None:
                 order = ordered_source_ids(state)
                 order[idx - 1], order[idx] = order[idx], order[idx - 1]
                 reorder_datasets(state, order)
+
+
+def _render_clean_overview() -> None:
+    state: ProjectState = st.session_state.project_state
+    st.subheader("Clean data overview")
+    sids = ordered_source_ids(state)
+    if not sids:
+        st.info("No datasets loaded.")
+        return
+
+    header = st.columns([1.2, 4, 2, 2, 2, 2])
+    header[0].markdown("**Select**")
+    header[1].markdown("**Dataset**")
+    header[2].markdown("**Records**")
+    header[3].markdown("**Fields**")
+    header[4].markdown("**Numeric fields**")
+    header[5].markdown("**Missing values**")
+
+    for sid in sids:
+        df = state.loaded.get(sid)
+        if df is None:
+            continue
+        label = state.id_to_display.get(sid, sid)
+        key = f"clean_select_{sid}"
+        if key not in st.session_state:
+            st.session_state[key] = True
+        cols = st.columns([1.2, 4, 2, 2, 2, 2])
+        cols[0].checkbox("", key=key)
+        cols[1].write(label)
+        cols[2].write(int(len(df)))
+        cols[3].write(int(df.shape[1]))
+        cols[4].write(int(df.select_dtypes(include="number").shape[1]))
+        cols[5].write(int(df.isna().sum().sum()))
+
+    st.divider()
+    st.caption("Detect outliers with a robust MAD-based filter.")
+    if st.button("Detect outliers"):
+        selected = [sid for sid in sids if st.session_state.get(f"clean_select_{sid}", False)]
+        if not selected:
+            st.warning("Select at least one dataset to detect outliers.")
+            return
+        threshold_raw = str(st.session_state.get("clean_outlier_threshold", "4.0")).strip()
+        try:
+            threshold = float(threshold_raw)
+        except ValueError:
+            st.error("Outlier threshold must be a valid number.")
+            return
+        if threshold <= 0:
+            st.error("Outlier threshold must be greater than 0.")
+            return
+        sentinels_raw = str(st.session_state.get("clean_sentinels", DEFAULT_SENTINELS))
+        sentinels = parse_sentinels(sentinels_raw)
+
+        results = []
+        for sid in selected:
+            df = state.loaded.get(sid)
+            if df is None:
+                continue
+            label = state.id_to_display.get(sid, sid)
+            numeric_cols = list(df.select_dtypes(include="number").columns)
+            if not numeric_cols:
+                results.append(
+                    {
+                        "Dataset": label,
+                        "Outlier values": 0,
+                        "Columns flagged": "No numeric columns",
+                    }
+                )
+                continue
+            total_outliers = 0
+            flagged = []
+            for col in numeric_cols:
+                values = sanitize_numeric(df[col], sentinels)
+                filtered = filter_outliers_mad(values, threshold)
+                before = np.isfinite(values.to_numpy(dtype=float))
+                after = np.isfinite(filtered.to_numpy(dtype=float))
+                count = int(np.sum(before & ~after))
+                if count:
+                    total_outliers += count
+                    flagged.append(f"{col} ({count})")
+            results.append(
+                {
+                    "Dataset": label,
+                    "Outlier values": total_outliers,
+                    "Columns flagged": ", ".join(flagged) if flagged else "None",
+                }
+            )
+        st.dataframe(pd.DataFrame(results), use_container_width=True)
 
 
 def _render_plot_controls() -> None:
@@ -778,6 +869,9 @@ def main() -> None:
 
     if step in ("Load", "Clean"):
         _render_dataset_controls()
+
+    if step == "Clean":
+        _render_clean_overview()
 
     if step == "Plot":
         _render_plot_controls()

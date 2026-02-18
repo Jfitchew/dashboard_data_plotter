@@ -703,11 +703,22 @@ def main() -> None:
     st.title("Dashboard Data Plotter")
     st.caption("Streamlit UI using shared core state and plotting.")
 
+    _setdefault_state("workflow_step", "Load")
+    workflow_steps = ["Load", "Clean", "Align", "Plot", "Analysis", "Report"]
+
     with st.sidebar:
-        step = st.selectbox(
-            "Workflow",
-            ["Load", "Clean", "Align", "Plot", "Analysis", "Report"],
-        )
+        st.subheader("Workflow")
+        for step_name in workflow_steps:
+            is_active = st.session_state.workflow_step == step_name
+            if st.button(
+                step_name,
+                key=f"workflow_{step_name.lower()}",
+                type="primary" if is_active else "secondary",
+                use_container_width=True,
+            ):
+                st.session_state.workflow_step = step_name
+
+        step = st.session_state.workflow_step
 
         if step == "Load":
             st.subheader("Load")

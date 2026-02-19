@@ -1,0 +1,16 @@
+# Python files use LF
+*.py text eol=lf
+
+# Config files use LF
+*.txt text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# Batch files use CRLF (Windows-native)
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Shell scripts use LF
+*.sh text eol=lf

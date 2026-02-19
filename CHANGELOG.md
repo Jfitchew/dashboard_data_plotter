@@ -1,6 +1,7 @@
 # Change Log
 
 3.29 - New Build Release
+  - 3.29.87 - 2026-02-19 - Increased radar auto-range lower-bound buffer from 10% to 20% of span when Fixed range is off.
   - 3.29.86 - 2026-02-19 - Documented changelog numbering policy: use the next build number (`BUILD_VERSION + 1`) for release headers and keep entries top-first.
   - 3.29.85 - 2026-02-19 - Removed git-based changelog auto-generation; the app now reads and maintains a single manual `CHANGELOG.md` source.
   - 3.29.84 - 2026-02-19 - Rotated bar value labels automatically when plotting 15+ datasets to reduce overlap in both Matplotlib and Plotly bar charts.

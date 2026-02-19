@@ -63,7 +63,7 @@ but the app is tolerant of missing or sparse data.
   - Clockwise positive
 - Automatically converts Body Rocket crank‑angle conventions
 - Optional background image support for radar plots (see below)
-- When Fixed range is off, the radar radial axis auto-ranges to keep the outer bound at the plotted maximum and set the inner bound to `minimum - 10% * (maximum - minimum)`
+- When Fixed range is off, the radar radial axis auto-ranges to keep the outer bound at the plotted maximum and set the inner bound to `minimum - 20% * (maximum - minimum)`
 - Supports:
   - Absolute metric values
   - % of dataset mean (falls back to full data-span scaling when the mean is near zero)

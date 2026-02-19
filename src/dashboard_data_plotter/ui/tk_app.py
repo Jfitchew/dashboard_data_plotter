@@ -2547,14 +2547,14 @@ class DashboardDataPlotter(tk.Tk):
             return None
         low, high = minmax
         span = high - low
-        low = low - (0.10 * span)
+        low = low - (0.20 * span)
         if not np.isfinite(low) or not np.isfinite(high):
             return None
         if low >= high:
             if high == 0.0:
                 low = -0.1
             else:
-                low = high - max(1e-9, 0.10 * abs(high))
+                low = high - max(1e-9, 0.20 * abs(high))
         return float(low), float(high)
 
     def _bar_label_decimals(self, values) -> int:

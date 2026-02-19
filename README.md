@@ -258,6 +258,8 @@ dist\DashboardDataPlotter.exe
 - `BUILD_VERSION` also lives in `src/dashboard_data_plotter/version.py` and increments for each packaged build
 - Each build should be tagged in git as `MAJOR.BUILD` (for example `3.19`)
 - `CHANGELOG.md` is a single manual source of truth and is not auto-generated from git
+- New changelog release headers should use `MAJOR.(BUILD_VERSION + 1)` (check `version.py` at time of entry)
+- Add newest changelog entries at the top of the current release section (descending entry id)
 
 ---
 

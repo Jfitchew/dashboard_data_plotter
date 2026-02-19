@@ -62,7 +62,7 @@ from dashboard_data_plotter.data.loaders import (
 )
 from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
 from dashboard_data_plotter.utils.log import log_exception, DEFAULT_LOG_PATH
-from dashboard_data_plotter.version import APP_TITLE
+from dashboard_data_plotter.version import APP_TITLE, BUILD_VERSION, MAJOR_VERSION
 import os
 import sys
 import json
@@ -351,12 +351,21 @@ class DashboardDataPlotter(tk.Tk):
             return os.path.join(sys._MEIPASS, "CHANGELOG.md")
         return ""
 
+    def _next_changelog_release_id(self) -> str:
+        major = str(MAJOR_VERSION).strip() or "0"
+        try:
+            next_build = int(str(BUILD_VERSION).strip()) + 1
+        except (TypeError, ValueError):
+            next_build = 1
+        return f"{major}.{next_build}"
+
     def _default_changelog_text(self) -> str:
         today = datetime.now().date().isoformat()
+        release_id = self._next_changelog_release_id()
         return (
             "# Change Log\n\n"
-            "## Unreleased\n"
-            f"- {today} - Change log initialized\n"
+            f"{release_id} - New Build Release\n"
+            f"  - {release_id}.1 - {today} - Change log initialized.\n"
         )
 
     def _ensure_changelog_file(self) -> str:

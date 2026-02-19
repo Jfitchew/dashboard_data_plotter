@@ -19,11 +19,31 @@ def choose_decimals_from_ticks(ticks, max_decimals=4) -> int:
 
 
 def to_percent_of_mean(values: np.ndarray) -> np.ndarray:
+    """Normalize values for "% of dataset mean" mode.
+
+    Primary behavior is 100 * value / mean(value). For mixed-sign datasets where
+    the mean is numerically close to zero, this falls back to scaling by the full
+    finite data span to avoid extreme, non-informative percentages.
+    """
     v = np.asarray(values, dtype=float)
-    mu = np.nanmean(v)
-    if not np.isfinite(mu) or abs(mu) < 1e-12:
-        raise ValueError("Mean is zero/invalid; cannot compute % of mean.")
-    return 100.0 * v / mu
+    finite = v[np.isfinite(v)]
+    if finite.size == 0:
+        raise ValueError("No finite values; cannot compute normalized values.")
+
+    mu = float(np.nanmean(finite))
+    v_min = float(np.nanmin(finite))
+    v_max = float(np.nanmax(finite))
+    span = v_max - v_min
+
+    # Use mean-based scaling unless the mean is effectively zero relative to the
+    # dataset spread, where mean-normalization becomes unstable.
+    near_zero_mean = abs(mu) < max(1e-12, 1e-3 * max(span, 1.0))
+    if np.isfinite(mu) and not near_zero_mean:
+        return 100.0 * v / mu
+
+    if not np.isfinite(span) or span <= 1e-12:
+        raise ValueError("Mean and span are zero/invalid; cannot normalize values.")
+    return 100.0 * v / span
 
 
 def circular_interp_baseline(b_ang_deg: np.ndarray, b_val: np.ndarray, q_ang_deg: np.ndarray) -> np.ndarray:

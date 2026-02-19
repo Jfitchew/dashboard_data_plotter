@@ -63,9 +63,10 @@ but the app is tolerant of missing or sparse data.
   - Clockwise positive
 - Automatically converts Body Rocket crank‑angle conventions
 - Optional background image support for radar plots (see below)
+- When Fixed range is off, the radar radial axis auto-ranges to keep the outer bound at the plotted maximum and set the inner bound to `minimum - 10% * (maximum - minimum)`
 - Supports:
   - Absolute metric values
-  - % of dataset mean
+  - % of dataset mean (falls back to full data-span scaling when the mean is near zero)
   - Comparison vs baseline (difference ring)
 
 ### Cartesian (0–360°) plot
@@ -73,7 +74,7 @@ but the app is tolerant of missing or sparse data.
 - Uses the same 52-bin angular aggregation as radar plots
 - Supports:
   - Absolute metric values
-  - % of dataset mean
+  - % of dataset mean (falls back to full data-span scaling when the mean is near zero)
   - Comparison vs baseline (signed delta on y, with a zero reference line)
 
 ### Bar plot
@@ -117,7 +118,7 @@ When comparison mode is enabled:
   - Paste JSON pane
   - Plot settings
   - Comparison controls
-  - Change log button (opens `CHANGELOG.md` in-app; auto-populated from git history with room for manual entries)
+  - Change log button (opens `CHANGELOG.md` in-app)
 - **Right panel**
   - Matplotlib figure canvas
   - Toolbar (zoom, pan, save image)
@@ -231,6 +232,7 @@ The Streamlit UI mirrors most plotting controls from the Tkinter app, including:
 - Baseline comparison
 - Optional background images/bands
 - Plot history (Prev / Next / Delete)
+  - Only successful plot renders are added to history
 
 To run the Streamlit UI:
 
@@ -255,7 +257,7 @@ dist\DashboardDataPlotter.exe
 - `MAJOR_VERSION` lives in `src/dashboard_data_plotter/version.py` and is **manual only**
 - `BUILD_VERSION` also lives in `src/dashboard_data_plotter/version.py` and increments for each packaged build
 - Each build should be tagged in git as `MAJOR.BUILD` (for example `3.19`)
-- The in-app Change Log auto-populates from git commits **since the most recent build tag**
+- `CHANGELOG.md` is a single manual source of truth and is not auto-generated from git
 
 ---
 

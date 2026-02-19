@@ -62,7 +62,7 @@ from dashboard_data_plotter.data.loaders import (
 )
 from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
 from dashboard_data_plotter.utils.log import log_exception, DEFAULT_LOG_PATH
-from dashboard_data_plotter.version import APP_TITLE, BUILD_VERSION, MAJOR_VERSION
+from dashboard_data_plotter.version import APP_TITLE
 import os
 import sys
 import json
@@ -78,7 +78,6 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, colorchooser, simpledialog
 import tkinter.font as tkfont
 import webbrowser
-import subprocess
 
 import numpy as np
 import pandas as pd
@@ -306,6 +305,20 @@ class DashboardDataPlotter(tk.Tk):
         base = re.sub(r"[<>:\"/\\\\|?*]+", "_", name).strip()
         return base if base else "project"
 
+    def _normalize_project_title(self, title: str) -> str:
+        text = (title or "").strip()
+        lower = text.lower()
+        if lower.endswith(".proj.json"):
+            text = text[:-10]
+        elif lower.endswith(".proj"):
+            text = text[:-5]
+        text = text.strip().rstrip(".")
+        return text or "Untitled Project"
+
+    def _project_title_from_path(self, path: str) -> str:
+        filename = os.path.basename(path or "").strip()
+        return self._normalize_project_title(filename)
+
     def _ensure_project_title(self) -> bool:
         if self.project_title and self.project_title != "Untitled Project":
             return True
@@ -338,25 +351,16 @@ class DashboardDataPlotter(tk.Tk):
             return os.path.join(sys._MEIPASS, "CHANGELOG.md")
         return ""
 
-    def _current_version_prefix(self) -> str:
-        return f"{MAJOR_VERSION}.{BUILD_VERSION}"
-
-    def _current_build_tag(self) -> str:
-        return self._current_version_prefix()
-
     def _default_changelog_text(self) -> str:
         today = datetime.now().date().isoformat()
-        version_prefix = self._current_version_prefix()
         return (
             "# Change Log\n\n"
-            f"{version_prefix} - {today} - Change log initialized\n"
-            f"  - {version_prefix}.1 - Added initial change log entry\n"
-            "\n"
-            "<!-- AUTO-CHANGELOG-START -->\n"
-            "<!-- AUTO-CHANGELOG-END -->\n"
+            "## Unreleased\n"
+            f"- {today} - Change log initialized\n"
         )
 
     def _ensure_changelog_file(self) -> str:
+        repo_path = self._changelog_repo_path()
         user_path = self._changelog_user_path()
         user_dir = os.path.dirname(user_path)
         if not os.path.isdir(user_dir):
@@ -369,156 +373,22 @@ class DashboardDataPlotter(tk.Tk):
         if packaged_path and os.path.isfile(packaged_path):
             return packaged_path
 
-        candidate_paths = [
-            user_path,
-            self._changelog_repo_path(),
-        ]
-        for path in candidate_paths:
-            if path and os.path.isfile(path):
-                self._update_changelog_from_git(path)
-                return path
-
-        try:
-            with open(user_path, "w", encoding="utf-8") as handle:
-                handle.write(self._default_changelog_text())
-            self._update_changelog_from_git(user_path)
+        if repo_path and os.path.isfile(repo_path):
+            return repo_path
+        if os.path.isfile(user_path):
             return user_path
-        except OSError:
-            return ""
 
-    def _git_latest_build_tag(self) -> str | None:
-        repo_root = os.path.normpath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "..")
-        )
-        try:
-            result = subprocess.run(
-                ["git", "tag", "--list", "--sort=-v:refname"],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except Exception:
-            return None
-
-        if result.returncode != 0:
-            return None
-
-        current_tag = self._current_build_tag()
-        tags = []
-        for raw in result.stdout.splitlines():
-            tag = raw.strip()
-            if not tag:
+        for target in (repo_path, user_path):
+            if not target:
                 continue
-            if not re.match(r"^\d+\.\d+$", tag):
+            try:
+                with open(target, "w", encoding="utf-8") as handle:
+                    handle.write(self._default_changelog_text())
+                return target
+            except OSError:
                 continue
-            tags.append(tag)
 
-        if current_tag in tags:
-            return current_tag
-
-        return tags[0] if tags else None
-
-    def _git_log_entries(self, limit: int = 50) -> tuple[list[tuple[str, str]], str | None]:
-        repo_root = os.path.normpath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "..")
-        )
-        tag = self._git_latest_build_tag()
-        cmd = ["git", "log", f"-n{limit}",
-               "--pretty=format:%ad|%s", "--date=short"]
-        if tag:
-            cmd = ["git", "log", f"{tag}..HEAD",
-                   "--pretty=format:%ad|%s", "--date=short"]
-        try:
-            result = subprocess.run(
-                cmd,
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except Exception:
-            return [], tag
-
-        if result.returncode != 0:
-            return [], tag
-
-        entries = []
-        for raw_line in result.stdout.splitlines():
-            if "|" not in raw_line:
-                continue
-            date_str, subject = raw_line.split("|", 1)
-            subject = subject.strip()
-            if not subject or subject.lower().startswith("merge "):
-                continue
-            entries.append((date_str.strip(), subject))
-        return entries, tag
-
-    def _build_auto_changelog_section(self) -> list[str]:
-        entries, tag = self._git_log_entries()
-        version_prefix = self._current_version_prefix()
-        today = datetime.now().date().isoformat()
-
-        lines = [
-            "<!-- AUTO-CHANGELOG-START -->",
-        ]
-
-        if not entries:
-            lines.extend(
-                [
-                    f"{version_prefix} - {today} - (Describe changes)",
-                    f"  - {version_prefix}.1 - (Describe change)",
-                ]
-            )
-        else:
-            if tag:
-                lines.append(
-                    f"{version_prefix} - {today} - Auto-generated from git history since tag {tag}"
-                )
-            else:
-                lines.append(
-                    f"{version_prefix} - {today} - Auto-generated from git history (no build tag found)"
-                )
-            total = len(entries)
-            for idx, (date_str, subject) in enumerate(entries):
-                sequence = total - idx
-                lines.append(
-                    f"  - {version_prefix}.{sequence} - {date_str} - {subject}")
-
-        lines.append("<!-- AUTO-CHANGELOG-END -->")
-        return lines
-
-    def _update_changelog_from_git(self, path: str) -> None:
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                content = handle.read()
-        except OSError:
-            return
-
-        auto_lines = self._build_auto_changelog_section()
-        start_marker = "<!-- AUTO-CHANGELOG-START -->"
-        end_marker = "<!-- AUTO-CHANGELOG-END -->"
-
-        if start_marker in content and end_marker in content:
-            before, rest = content.split(start_marker, 1)
-            _, after = rest.split(end_marker, 1)
-            updated = before.rstrip() + "\n\n" + "\n".join(auto_lines) + "\n" + after.lstrip()
-        else:
-            lines = content.splitlines()
-            insert_at = 0
-            if lines and lines[0].lstrip().startswith("#"):
-                insert_at = 1
-                if len(lines) > 1 and not lines[1].strip():
-                    insert_at = 2
-            updated_lines = lines[:insert_at] + [""] + \
-                auto_lines + [""] + lines[insert_at:]
-            updated = "\n".join(updated_lines)
-
-        try:
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(updated.rstrip() + "\n")
-        except OSError:
-            return
+        return ""
 
     def _render_markdown(self, widget: tk.Text, markdown_text: str) -> None:
         widget.configure(state="normal")
@@ -1382,6 +1252,9 @@ class DashboardDataPlotter(tk.Tk):
             ToolTip(widget, text)
 
     def _redraw_empty(self):
+        if getattr(self.ax, "name", "") != "polar":
+            self.fig.clf()
+            self.ax = self.fig.add_subplot(111, projection="polar")
         self.ax.clear()
         self.ax.set_theta_zero_location("N")
         self.ax.set_theta_direction(-1)
@@ -2659,6 +2532,22 @@ class DashboardDataPlotter(tk.Tk):
             return None
         return float(np.nanmin(arr)), float(np.nanmax(arr))
 
+    def _radar_metric_range_from_values(self, values):
+        minmax = self._minmax_from_values(values)
+        if not minmax:
+            return None
+        low, high = minmax
+        span = high - low
+        low = low - (0.10 * span)
+        if not np.isfinite(low) or not np.isfinite(high):
+            return None
+        if low >= high:
+            if high == 0.0:
+                low = -0.1
+            else:
+                low = high - max(1e-9, 0.10 * abs(high))
+        return float(low), float(high)
+
     def _bar_label_decimals(self, values) -> int:
         arr = np.asarray(values, dtype=float).ravel()
         arr = arr[np.isfinite(arr)]
@@ -3235,7 +3124,12 @@ class DashboardDataPlotter(tk.Tk):
             payload.append(saved)
         return payload
 
-    def _apply_history_settings(self, settings):
+    def _apply_history_settings(
+        self,
+        settings,
+        source_id_map=None,
+        display_to_source_map=None,
+    ):
         if not isinstance(settings, dict):
             return
         history = settings.get("plot_history")
@@ -3251,14 +3145,21 @@ class DashboardDataPlotter(tk.Tk):
             if isinstance(show_flag, dict):
                 restored_show = {}
                 for key, flag in show_flag.items():
-                    sid = str(key)
-                    if sid in self.state.loaded:
-                        restored_show[sid] = bool(flag)
+                    key_str = str(key)
+                    mapped_sid = ""
+                    if isinstance(source_id_map, dict):
+                        mapped_sid = str(source_id_map.get(key_str, "")).strip()
+                    if mapped_sid and mapped_sid in self.state.loaded:
+                        restored_show[mapped_sid] = bool(flag)
+                        continue
+                    if key_str in self.state.loaded:
+                        restored_show[key_str] = bool(flag)
                         continue
                     # Backward compatibility for old saves that keyed by display name.
-                    sid = self.state.display_to_id.get(str(key))
-                    if sid and sid in self.state.loaded:
-                        restored_show[sid] = bool(flag)
+                    if isinstance(display_to_source_map, dict):
+                        mapped_sid = str(display_to_source_map.get(key_str, "")).strip()
+                        if mapped_sid and mapped_sid in self.state.loaded:
+                            restored_show[mapped_sid] = bool(flag)
                 restored["show_flag"] = restored_show
             new_history.append(restored)
         self._history = new_history
@@ -3866,6 +3767,45 @@ class DashboardDataPlotter(tk.Tk):
 
         container = tk.Frame(popup, background="white", borderwidth=1, relief="solid")
         container.pack(fill="both", expand=True)
+        header = tk.Frame(container, background="#f0f0f0")
+        header.pack(fill="x")
+        title = tk.Label(
+            header,
+            text="Select baseline datasets",
+            background="#f0f0f0",
+            anchor="w",
+        )
+        title.pack(side="left", padx=8, pady=4, fill="x", expand=True)
+        close_btn = tk.Button(
+            header,
+            text="X",
+            command=self._close_baseline_popup,
+            background="#f0f0f0",
+            activebackground="#e0e0e0",
+            borderwidth=0,
+            padx=8,
+            pady=2,
+        )
+        close_btn.pack(side="right", padx=4, pady=2)
+
+        drag_state = {"x": 0, "y": 0, "win_x": 0, "win_y": 0}
+
+        def _start_drag(event):
+            drag_state["x"] = event.x_root
+            drag_state["y"] = event.y_root
+            drag_state["win_x"] = popup.winfo_x()
+            drag_state["win_y"] = popup.winfo_y()
+
+        def _on_drag(event):
+            dx = event.x_root - drag_state["x"]
+            dy = event.y_root - drag_state["y"]
+            popup.geometry(f"+{drag_state['win_x'] + dx}+{drag_state['win_y'] + dy}")
+
+        header.bind("<ButtonPress-1>", _start_drag, add=True)
+        header.bind("<B1-Motion>", _on_drag, add=True)
+        title.bind("<ButtonPress-1>", _start_drag, add=True)
+        title.bind("<B1-Motion>", _on_drag, add=True)
+
         canvas = tk.Canvas(container, background="white", highlightthickness=0)
         scrollbar = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
@@ -3897,6 +3837,7 @@ class DashboardDataPlotter(tk.Tk):
             cb.pack(fill="x", padx=8, pady=2)
 
         self._position_baseline_popup(popup)
+        popup.after_idle(lambda: self._reposition_baseline_popup_if_open(popup))
         popup.lift()
         try:
             popup.attributes("-topmost", True)
@@ -3909,22 +3850,40 @@ class DashboardDataPlotter(tk.Tk):
     def _position_baseline_popup(self, popup: tk.Toplevel) -> None:
         self.update_idletasks()
         popup.update_idletasks()
-        btn_root_x = self.baseline_menu_btn.winfo_rootx()
-        btn_root_y = self.baseline_menu_btn.winfo_rooty()
-        if btn_root_x == 0 and btn_root_y == 0:
-            btn_root_x = self.winfo_rootx() + self.baseline_menu_btn.winfo_x()
-            btn_root_y = self.winfo_rooty() + self.baseline_menu_btn.winfo_y()
-        x = btn_root_x
-        y = btn_root_y + self.baseline_menu_btn.winfo_height()
         width = max(self.baseline_menu_btn.winfo_width(), popup.winfo_reqwidth())
         height = min(popup.winfo_reqheight(), 260)
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
-        if x + width > screen_w:
-            x = max(0, screen_w - width - 10)
-        if y + height > screen_h:
-            y = max(0, btn_root_y - height)
+        anchor_ok = (
+            self.baseline_menu_btn.winfo_ismapped()
+            and self.baseline_menu_btn.winfo_width() > 1
+            and self.baseline_menu_btn.winfo_height() > 1
+        )
+        if anchor_ok:
+            btn_root_x = self.baseline_menu_btn.winfo_rootx()
+            btn_root_y = self.baseline_menu_btn.winfo_rooty()
+            if btn_root_x == 0 and btn_root_y == 0:
+                btn_root_x = self.winfo_rootx() + self.baseline_menu_btn.winfo_x()
+                btn_root_y = self.winfo_rooty() + self.baseline_menu_btn.winfo_y()
+            x = btn_root_x
+            y = btn_root_y + self.baseline_menu_btn.winfo_height()
+            if x + width > screen_w:
+                x = max(0, screen_w - width - 10)
+            if y + height > screen_h:
+                y = max(0, btn_root_y - height)
+            if x < 0 or y < 0:
+                anchor_ok = False
+        if not anchor_ok:
+            pointer_x = self.winfo_pointerx()
+            pointer_y = self.winfo_pointery()
+            x = max(0, min(pointer_x - int(width / 2), screen_w - width))
+            y = max(0, min(pointer_y + 8, screen_h - height))
         popup.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _reposition_baseline_popup_if_open(self, popup: tk.Toplevel) -> None:
+        if self._baseline_popup is not popup:
+            return
+        self._position_baseline_popup(popup)
 
     def _close_baseline_popup(self) -> None:
         if self._baseline_popup is None:
@@ -4159,20 +4118,37 @@ class DashboardDataPlotter(tk.Tk):
             self._suspend_dirty = True
             self._reset_project_state()
 
+            source_id_map = {}
+            display_candidates = {}
             for name, df, source_id, display_override in datasets:
                 display = display_override or str(name)
-                source_id = self._unique_project_source_id(display, source_id)
+                original_source_id = str(source_id or "").strip()
+                source_id = self._unique_project_source_id(display, original_source_id)
                 self._register_dataset(
                     source_id=source_id, display=display, df=df)
+                if original_source_id:
+                    source_id_map[original_source_id] = source_id
+                display_key = str(display).strip()
+                if display_key:
+                    display_candidates.setdefault(display_key, []).append(source_id)
                 binned_df = binned_by_name.get(str(name))
                 if binned_df is not None:
                     self.state.binned[source_id] = binned_df
 
             if settings:
+                display_to_source_map = {
+                    name: sids[0]
+                    for name, sids in display_candidates.items()
+                    if len(sids) == 1
+                }
                 apply_project_settings(self.state, settings)
                 self._load_annotation_format_from_project_options()
                 self._sync_ui_from_state_settings()
-                self._apply_history_settings(settings)
+                self._apply_history_settings(
+                    settings,
+                    source_id_map=source_id_map,
+                    display_to_source_map=display_to_source_map,
+                )
 
             self._sync_treeview_from_state()
             self.refresh_metric_choices()
@@ -4183,8 +4159,9 @@ class DashboardDataPlotter(tk.Tk):
             self.project_title = str(
                 settings.get("project_title") or "").strip()
             if not self.project_title:
-                self.project_title = os.path.splitext(
-                    os.path.basename(path))[0]
+                self.project_title = self._project_title_from_path(path)
+            else:
+                self.project_title = self._normalize_project_title(self.project_title)
             self.project_path = path
             self._clear_dirty()
             self.status.set(f"Loaded project: {os.path.basename(path)}")
@@ -4202,6 +4179,7 @@ class DashboardDataPlotter(tk.Tk):
             "Save plot history",
             "Do you want to save your plot history with this project?",
         )
+        self.project_title = self._normalize_project_title(self.project_title)
         initial_dir = os.path.dirname(
             self.project_path) if self.project_path else ""
         initial_name = f"{self._sanitize_filename(self.project_title)}.proj.json"
@@ -4217,7 +4195,7 @@ class DashboardDataPlotter(tk.Tk):
         if not out_path:
             return False
         try:
-            new_title = os.path.splitext(os.path.basename(out_path))[0].strip()
+            new_title = self._project_title_from_path(out_path).strip()
             if new_title:
                 self.project_title = new_title
             self.state.analysis_settings.report_options["annotation_format"] = json.dumps(
@@ -4316,12 +4294,12 @@ class DashboardDataPlotter(tk.Tk):
             )
         except Exception as e:
             messagebox.showerror("Bar plot error", str(e))
-            return
+            return False
 
         if not data.labels:
             messagebox.showinfo("Nothing to plot",
                                 "No datasets produced valid bar values.")
-            return
+            return False
 
         range_minmax = self._minmax_from_values(data.values)
         if range_minmax:
@@ -4345,6 +4323,7 @@ class DashboardDataPlotter(tk.Tk):
         text_values = [self._format_bar_value(v, decimals) for v in data.values]
         longest_label = max((len(str(label)) for label in data.labels), default=0)
         tick_font_size = 9 if longest_label <= 15 else 8
+        value_label_angle = -55 if len(data.labels) >= 15 else 0
         fig = go.Figure()
         fig.add_bar(
             x=data.labels,
@@ -4352,6 +4331,7 @@ class DashboardDataPlotter(tk.Tk):
             marker_color=bar_colors,
             text=text_values,
             textposition="outside",
+            textangle=value_label_angle,
             cliponaxis=False,
         )
         fig.update_layout(
@@ -4374,6 +4354,7 @@ class DashboardDataPlotter(tk.Tk):
         if data.errors:
             messagebox.showwarning(
                 "Partial plot", f"Plotted {len(data.labels)} bar(s) with errors.\n\n" + "\n".join(data.errors))
+        return True
 
     def _plot_plotly_timeseries(self, metric_col, sentinels, value_mode, agg_mode, outlier_threshold,
                                 compare, baseline_id, baseline_ids, baseline_display, fixed_range):
@@ -4394,12 +4375,12 @@ class DashboardDataPlotter(tk.Tk):
             )
         except Exception as e:
             messagebox.showerror("Time series error", str(e))
-            return
+            return False
 
         if not data.traces:
             messagebox.showinfo(
                 "Nothing to plot", "No datasets produced valid time series values.")
-            return
+            return False
 
         fig = go.Figure()
         range_values = []
@@ -4482,6 +4463,7 @@ class DashboardDataPlotter(tk.Tk):
         if data.errors:
             messagebox.showwarning(
                 "Partial plot", f"Plotted {len(data.traces)} trace(s) with errors.\n\n" + "\n".join(data.errors))
+        return True
 
     def _plot_plotly_cartesian(self, angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
                                compare, baseline_id, baseline_ids, baseline_display, fixed_range):
@@ -4506,12 +4488,12 @@ class DashboardDataPlotter(tk.Tk):
             )
         except Exception as e:
             messagebox.showerror("Cartesian plot error", str(e))
-            return
+            return False
 
         if not data.traces:
             messagebox.showinfo(
                 "Nothing to plot", "No datasets produced valid cartesian values.")
-            return
+            return False
 
         range_values = []
         for trace in data.traces:
@@ -4575,9 +4557,24 @@ class DashboardDataPlotter(tk.Tk):
         if data.errors:
             messagebox.showwarning(
                 "Partial plot", f"Plotted {len(data.traces)} trace(s) with errors.\n\n" + "\n".join(data.errors))
+        return True
 
     def _plot_plotly_radar(self, angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
-                           compare, baseline_id, baseline_ids, baseline_display, fixed_range):
+                           compare, baseline_id, baseline_ids=None, baseline_display="", fixed_range=None):
+        # Backward compatibility for older positional call shape:
+        # (..., compare, baseline_id, baseline_display, fixed_range)
+        if fixed_range is None and isinstance(baseline_display, (tuple, list)) and len(baseline_display) == 2:
+            if baseline_ids is None or isinstance(baseline_ids, str):
+                fixed_range = baseline_display
+                baseline_display = str(baseline_ids or "")
+                baseline_ids = None
+        if baseline_ids is None:
+            baseline_ids = [baseline_id] if baseline_id else []
+        elif isinstance(baseline_ids, str):
+            baseline_ids = [baseline_ids] if baseline_ids else []
+        else:
+            baseline_ids = [sid for sid in baseline_ids if sid]
+
         fig = go.Figure()
         self._apply_radar_background_plotly(fig)
         color_map = self._dataset_color_map()
@@ -4599,12 +4596,12 @@ class DashboardDataPlotter(tk.Tk):
             )
         except Exception as e:
             messagebox.showerror("Radar plot error", str(e))
-            return
+            return False
 
         if not data.traces:
             messagebox.showinfo(
                 "Nothing to plot", "No datasets produced valid radar values.")
-            return
+            return False
 
         baseline_legend_label = ""
         if data.compare and data.baseline_label:
@@ -4659,6 +4656,15 @@ class DashboardDataPlotter(tk.Tk):
         if fixed_range:
             fig.update_polars(radialaxis=dict(
                 range=[fixed_range[0], fixed_range[1]]))
+        else:
+            auto_range = self._radar_metric_range_from_values(radar_vals)
+            if auto_range:
+                if data.compare:
+                    fig.update_polars(radialaxis=dict(
+                        range=[auto_range[0] + data.offset, auto_range[1] + data.offset]))
+                else:
+                    fig.update_polars(radialaxis=dict(
+                        range=[auto_range[0], auto_range[1]]))
 
         self._last_plotly_fig = fig
         self._last_plotly_title = title
@@ -4666,6 +4672,7 @@ class DashboardDataPlotter(tk.Tk):
         if data.errors:
             messagebox.showwarning(
                 "Partial plot", f"Plotted {len(data.traces)} trace(s) with errors.\n\n" + "\n".join(data.errors))
+        return True
 
     def _sanitize_filename_part(self, value: str) -> str:
         raw = re.sub(r"[^A-Za-z0-9]+", "_", str(value or "")).strip("_")
@@ -4927,9 +4934,11 @@ class DashboardDataPlotter(tk.Tk):
 
         if use_plotly_live:
             if plot_type == "timeseries":
-                self._plot_plotly_timeseries(
+                plotted_ok = self._plot_plotly_timeseries(
                     metric_col, sentinels, value_mode, agg_mode, outlier_threshold,
                     compare, baseline_id, baseline_ids, baseline_display, fixed_range)
+                if not plotted_ok:
+                    return
                 self._push_history()
                 self._warn_outliers_if_needed(
                     plot_type, angle_col, metric_col, sentinels, compare, baseline_id)
@@ -4937,9 +4946,11 @@ class DashboardDataPlotter(tk.Tk):
                     plot_type, angle_col, metric_col, sentinels, compare, baseline_id, outlier_threshold)
                 return
             if plot_type == "bar":
-                self._plot_plotly_bar(
+                plotted_ok = self._plot_plotly_bar(
                     angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold,
                     compare, baseline_id, baseline_ids, baseline_display, fixed_range)
+                if not plotted_ok:
+                    return
                 self._push_history()
                 self._warn_outliers_if_needed(
                     plot_type, angle_col, metric_col, sentinels, compare, baseline_id)
@@ -4951,18 +4962,22 @@ class DashboardDataPlotter(tk.Tk):
                     "Missing selection", "Select an angle column (required for Radar/Cartesian plots).")
                 return
             if plot_type == "cartesian":
-                self._plot_plotly_cartesian(
+                plotted_ok = self._plot_plotly_cartesian(
                     angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
                     compare, baseline_id, baseline_ids, baseline_display, fixed_range)
+                if not plotted_ok:
+                    return
                 self._push_history()
                 self._warn_outliers_if_needed(
                     plot_type, angle_col, metric_col, sentinels, compare, baseline_id)
                 self._warn_outlier_removal_rate(
                     plot_type, angle_col, metric_col, sentinels, compare, baseline_id, outlier_threshold)
                 return
-            self._plot_plotly_radar(
+            plotted_ok = self._plot_plotly_radar(
                 angle_col, metric_col, sentinels, value_mode, agg_mode, outlier_threshold, close_loop,
                 compare, baseline_id, baseline_ids, baseline_display, fixed_range)
+            if not plotted_ok:
+                return
             self._push_history()
             self._warn_outliers_if_needed(
                 plot_type, angle_col, metric_col, sentinels, compare, baseline_id)
@@ -5170,6 +5185,8 @@ class DashboardDataPlotter(tk.Tk):
             y_span = float(np.nanmax(y_values) - np.nanmin(y_values)) if y_values.size else 0.0
             y_max_abs = float(np.nanmax(np.abs(y_values))) if y_values.size else 0.0
             y_offset = max(y_span * 0.02, y_max_abs * 0.015, 1e-6)
+            value_label_rotation = 55 if len(data.labels) >= 15 else 0
+            value_label_ha = "left" if value_label_rotation else "center"
             for bar, y_val, label_text in zip(bars, y_values, text_values):
                 x_pos = bar.get_x() + bar.get_width() / 2
                 if data.compare and y_val < 0:
@@ -5182,9 +5199,11 @@ class DashboardDataPlotter(tk.Tk):
                     x_pos,
                     y_pos,
                     label_text,
-                    ha="center",
+                    ha=value_label_ha,
                     va=va,
                     fontsize=8,
+                    rotation=value_label_rotation,
+                    rotation_mode="anchor",
                 )
             if not fixed_range:
                 self.ax.margins(y=0.14)
@@ -5424,14 +5443,27 @@ class DashboardDataPlotter(tk.Tk):
             self.fig.subplots_adjust(left=0.06, right=0.76, top=0.92, bottom=0.08)
             self._apply_top_legend(handles, labels, font_size=9)
             self.ax.set_position([0.06, 0.08, 0.68, 0.8])
+            auto_range = None
             if fixed_range:
                 self.ax.set_rlim(data.offset + fixed_range[0],
                                  data.offset + fixed_range[1])
             else:
-                self.ax.autoscale(enable=True, axis="y")
-                self.ax.autoscale_view(scaley=True)
+                auto_range = self._radar_metric_range_from_values(radar_vals)
+                if auto_range:
+                    self.ax.set_rlim(
+                        data.offset + auto_range[0],
+                        data.offset + auto_range[1],
+                    )
+                else:
+                    self.ax.autoscale(enable=True, axis="y")
+                    self.ax.autoscale_view(scaley=True)
             low, high = self.ax.get_ylim()
-            self._update_range_entries(low - data.offset, high - data.offset)
+            if fixed_range:
+                self._update_range_entries(low - data.offset, high - data.offset)
+            elif auto_range:
+                self._update_range_entries(auto_range[0], auto_range[1])
+            else:
+                self._update_range_entries(low - data.offset, high - data.offset)
             fmt_delta_ticks(self.ax, data.offset)
         else:
             self._set_plot_title(
@@ -5445,13 +5477,23 @@ class DashboardDataPlotter(tk.Tk):
             if plotted:
                 handles, labels = self.ax.get_legend_handles_labels()
                 self._apply_top_legend(handles, labels, font_size=9)
+            auto_range = None
             if fixed_range:
                 self.ax.set_rlim(fixed_range[0], fixed_range[1])
             else:
-                self.ax.autoscale(enable=True, axis="y")
-                self.ax.autoscale_view(scaley=True)
+                auto_range = self._radar_metric_range_from_values(radar_vals)
+                if auto_range:
+                    self.ax.set_rlim(auto_range[0], auto_range[1])
+                else:
+                    self.ax.autoscale(enable=True, axis="y")
+                    self.ax.autoscale_view(scaley=True)
             low, high = self.ax.get_ylim()
-            self._update_range_entries(low, high)
+            if fixed_range:
+                self._update_range_entries(low, high)
+            elif auto_range:
+                self._update_range_entries(auto_range[0], auto_range[1])
+            else:
+                self._update_range_entries(low, high)
             fmt_abs_ticks(self.ax)
 
         outlier_points = self._collect_outlier_points(

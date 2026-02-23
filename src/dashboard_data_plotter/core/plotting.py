@@ -427,8 +427,6 @@ def prepare_radar_plot(
         for sid in order:
             if not state.show_flag.get(sid, True):
                 continue
-            if sid in baseline_id_set:
-                continue
             label = state.id_to_display.get(sid, sid)
             try:
                 plot_df = _get_plot_df(state, sid, use_original_binned)
@@ -565,8 +563,6 @@ def prepare_cartesian_plot(
         for sid in order:
             if not state.show_flag.get(sid, True):
                 continue
-            if sid in baseline_id_set:
-                continue
             label = state.id_to_display.get(sid, sid)
             try:
                 plot_df = _get_plot_df(state, sid, use_original_binned)
@@ -683,16 +679,7 @@ def prepare_bar_plot(
             )
         baseline_value = float(np.nanmean(np.asarray(baseline_values, dtype=float)))
 
-    ordered_ids = []
-    for sid in order:
-        if compare and sid in baseline_id_set:
-            ordered_ids.append(sid)
-        elif state.show_flag.get(sid, True):
-            ordered_ids.append(sid)
-    if compare:
-        for sid in baseline_ids:
-            if sid not in ordered_ids:
-                ordered_ids.append(sid)
+    ordered_ids = [sid for sid in order if state.show_flag.get(sid, True)]
 
     for sid in ordered_ids:
         label = state.id_to_display.get(sid, sid)
@@ -706,10 +693,7 @@ def prepare_bar_plot(
                 outlier_method=outlier_method,
             )
             if compare and baseline_value is not None:
-                if sid in baseline_id_set:
-                    val = 0.0
-                else:
-                    val = val - baseline_value
+                val = val - baseline_value
             data.labels.append(label)
             data.values.append(val)
         except Exception as exc:
@@ -775,8 +759,6 @@ def prepare_timeseries_plot(
 
     for sid in order:
         if not state.show_flag.get(sid, True):
-            continue
-        if compare and sid in baseline_id_set:
             continue
         label = state.id_to_display.get(sid, sid)
         try:

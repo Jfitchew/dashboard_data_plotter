@@ -31,6 +31,7 @@ from dashboard_data_plotter.core.io import (
     extract_project_settings,
     apply_project_settings,
     build_project_payload,
+    build_dataset_data_payload,
     PROJECT_SETTINGS_KEY,
 )
 from dashboard_data_plotter.core.reporting import (
@@ -39,11 +40,13 @@ from dashboard_data_plotter.core.reporting import (
     save_report as save_report_file,
     load_report as load_report_file,
 )
+from dashboard_data_plotter.core.report_pdf import export_report_pdf as export_report_pdf_file
 from dashboard_data_plotter.core.plotting import (
     prepare_radar_plot,
     prepare_cartesian_plot,
     prepare_bar_plot,
     prepare_timeseries_plot,
+    _aggregate_timeseries_baseline,
 )
 from dashboard_data_plotter.data.loaders import (
     DEFAULT_SENTINELS,
@@ -74,6 +77,8 @@ from datetime import datetime
 import csv
 import re
 import tempfile
+import ctypes
+import subprocess
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, colorchooser, simpledialog
 import tkinter.font as tkfont
@@ -169,10 +174,11 @@ class DashboardDataPlotter(tk.Tk):
         self.metric_var = tk.StringVar(value="")
         self.agg_var = tk.StringVar(value="median")
         self.remove_outliers_var = tk.BooleanVar(value=False)
-        self.outlier_method_var = tk.StringVar(value="Impulse")
+        self.outlier_method_var = tk.StringVar(value="MAD")
         self.outlier_thresh_var = tk.StringVar(value="4.0")
         self.show_outliers_var = tk.BooleanVar(value=False)
         self.outlier_warnings_var = tk.BooleanVar(value=True)
+        self._outlier_warnings_disable_notice_shown = False
         self.close_loop_var = tk.BooleanVar(value=True)
         self.sentinels_var = tk.StringVar(value=DEFAULT_SENTINELS)
 
@@ -201,6 +207,7 @@ class DashboardDataPlotter(tk.Tk):
         self.baseline_menu_var = tk.StringVar(value="Select baseline")
         self._baseline_menu_vars: dict[str, tk.BooleanVar] = {}
         self._baseline_menu_displays: list[str] = []
+        self._baseline_menu_widget: tk.Menu | None = None
         self._baseline_popup: tk.Toplevel | None = None
         self._baseline_popup_binding = None
 
@@ -216,6 +223,7 @@ class DashboardDataPlotter(tk.Tk):
         self._last_plotly_title = ""
         self._report_dirty = False
         self._report_temp_assets_dir = ""
+        self.report_hide_meta_var = tk.BooleanVar(value=False)
 
         # Annotations (matplotlib only)
         self.annotation_mode_var = tk.BooleanVar(value=False)
@@ -629,9 +637,9 @@ class DashboardDataPlotter(tk.Tk):
         self.btn_remove = ttk.Button(
             data_btns, text="Remove", command=self.remove_selected, width=8)
         self.btn_remove.grid(row=0, column=2, padx=(6, 0), pady=(0, 0))
-        self.btn_clear_all = ttk.Button(
-            data_btns, text="Remove all", command=self.clear_all, width=11)
-        self.btn_clear_all.grid(row=0, column=3, padx=(3, 0), pady=(0, 0))
+        self.btn_save_data = ttk.Button(
+            data_btns, text="Save Data", command=self.save_data, width=11)
+        self.btn_save_data.grid(row=0, column=3, padx=(3, 0), pady=(0, 0))
         self.btn_rename = ttk.Button(
             data_btns, text="Rename", command=self.rename_selected, width=8)
         self.btn_rename.grid(row=0, column=4, padx=(6, 0), pady=(0, 0))
@@ -882,10 +890,16 @@ class DashboardDataPlotter(tk.Tk):
             comp_row, text="Difference vs Baseline:", variable=self.compare_var,
             command=self._on_compare_toggle)
         self.chk_compare.grid(row=0, column=1, sticky="w", padx=(12, 0))
-        self.baseline_menu_btn = ttk.Button(
-            comp_row, textvariable=self.baseline_menu_var, width=34, command=self._toggle_baseline_popup)
+        self.baseline_menu_btn = ttk.Menubutton(
+            comp_row, textvariable=self.baseline_menu_var, width=34, direction="below")
         self.baseline_menu_btn.configure(style="Baseline.TMenubutton")
         self.baseline_menu_btn.grid(row=0, column=2, sticky="w", padx=(8, 0))
+        self.baseline_menu_btn.bind(
+            "<ButtonRelease-1>", self._toggle_baseline_popup, add=True)
+        self.baseline_menu_btn.bind(
+            "<Return>", self._toggle_baseline_popup, add=True)
+        self.baseline_menu_btn.bind(
+            "<space>", self._toggle_baseline_popup, add=True)
 
         ttk.Separator(left).grid(row=16, column=0, sticky="ew", pady=6)
 
@@ -927,10 +941,13 @@ class DashboardDataPlotter(tk.Tk):
 
         self.status = tk.StringVar(
             value="Load one or more JSON files, or paste a dataset object, to begin.")
-        ttk.Separator(left).grid(row=18, column=0, sticky="ew", pady=6)
+
+        bold_sep = tk.Frame(left, height=3, bg="#444")
+        bold_sep.grid(row=18, column=0, sticky="ew", pady=6)
+
         report_header = ttk.Frame(left)
         report_header.grid(row=19, column=0, sticky="ew")
-        ttk.Label(report_header, text="Report", font=(
+        ttk.Label(report_header, text="Reports", font=(
             "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
         report_btns = ttk.Frame(report_header)
         report_btns.grid(row=0, column=1, sticky="e", padx=(12, 0))
@@ -940,36 +957,53 @@ class DashboardDataPlotter(tk.Tk):
         self.btn_open_report = ttk.Button(
             report_btns, text="Open report...", command=self.open_report, width=12)
         self.btn_open_report.grid(row=0, column=1, padx=(6, 0))
-        self.btn_view_report = ttk.Button(
-            report_btns, text="Preview report", command=self.view_report, width=13)
-        self.btn_view_report.grid(row=0, column=2, padx=(6, 0))
+        self.btn_manage_report = ttk.Button(
+            report_btns, text="Edit report", command=self.manage_report_content, width=14)
+        self.btn_manage_report.grid(row=0, column=2, padx=(6, 0))
         self.btn_save_report = ttk.Button(
             report_btns, text="Save report", command=self.save_report, width=12)
         self.btn_save_report.grid(row=0, column=3, padx=(6, 0))
 
         report_btns2 = ttk.Frame(left)
         report_btns2.grid(row=20, column=0, sticky="ew", pady=(6, 0))
+        self.btn_add_text_block = ttk.Button(
+            report_btns2, text="Add text block...", command=self.add_report_text_block, width=14)
+        self.btn_add_text_block.grid(row=0, column=0, padx=(6, 0))
         self.btn_add_snapshot = ttk.Button(
-            report_btns2, text="Add snapshot...", command=self.add_report_snapshot, width=14)
-        self.btn_add_snapshot.grid(row=0, column=0, sticky="w")
+            report_btns2, text="Add plot snapshot", command=self.add_report_snapshot, width=17)
+        self.btn_add_snapshot.grid(row=0, column=1, padx=(6, 0))
         self.chk_annotate = ttk.Checkbutton(
             report_btns2, text="Annotate", variable=self.annotation_mode_var,
             command=self._on_annotation_toggle)
-        self.chk_annotate.grid(row=0, column=1, padx=(10, 0))
+        self.chk_annotate.grid(row=0, column=2, padx=(10, 0))
         self.btn_clear_annotations = ttk.Button(
             report_btns2, text="Clear annotations", command=self.clear_annotations)
-        self.btn_clear_annotations.grid(row=0, column=2, padx=(6, 0))
+        self.btn_clear_annotations.grid(row=0, column=3, padx=(6, 0))
+
+        report_btns3 = ttk.Frame(left)
+        report_btns3.grid(row=21, column=0, sticky="ew", pady=(6, 0))
+        self.btn_view_report = ttk.Button(
+            report_btns3, text="Preview report", command=self.view_report, width=13)
+        self.btn_view_report.grid(row=0, column=0, padx=(6, 0))
+        self.chk_report_include_meta = ttk.Checkbutton(
+            report_btns3,
+            text="Incl meta",
+            variable=self.report_hide_meta_var,
+            command=self._on_report_include_meta_toggle,
+        )
+        self.chk_report_include_meta.grid(row=0, column=1, padx=(8, 0))
+
         self.btn_export_report_html = ttk.Button(
-            report_btns2, text="Export HTML...", command=self.export_report_html, width=12)
-        self.btn_export_report_html.grid(row=0, column=3, padx=(6, 0))
+            report_btns3, text="Export HTML...", command=self.export_report_html, width=12)
+        self.btn_export_report_html.grid(row=0, column=2, sticky="w")
         self.btn_export_report_pdf = ttk.Button(
-            report_btns2, text="Export PDF...", command=self.export_report_pdf, width=12)
-        self.btn_export_report_pdf.grid(row=0, column=4, padx=(6, 0))
+            report_btns3, text="Export PDF...", command=self.export_report_pdf, width=12)
+        self.btn_export_report_pdf.grid(row=0, column=3, padx=(6, 0))
 
         ttk.Label(left, textvariable=self.status, wraplength=380, foreground="#333").grid(
-            row=21, column=0, sticky="w", pady=(10, 0))
+            row=22, column=0, sticky="w", pady=(10, 0))
 
-        self._on_plot_type_change()
+        self._on_plot_type_change(apply_default_agg=False)
         self._set_compare_controls_state()
         self._on_outlier_toggle()
         self._add_tooltips()
@@ -1003,7 +1037,8 @@ class DashboardDataPlotter(tk.Tk):
             self.state.display_to_id.get(name, "")
             for name in self.baseline_multi_displays
         ]
-        baseline_ids = [sid for sid in baseline_ids if sid in self.state.loaded]
+        baseline_ids = [
+            sid for sid in baseline_ids if sid in self.state.loaded]
         if baseline_id and baseline_id in self.state.loaded and baseline_id not in baseline_ids:
             baseline_ids.insert(0, baseline_id)
         set_baselines(self.state, baseline_ids)
@@ -1179,8 +1214,9 @@ class DashboardDataPlotter(tk.Tk):
             (self.btn_guide, "Open the in-app workflow guide."),
             (self.btn_add_files, "Add one or more data files to this project."),
             (self.btn_remove, "Remove the selected dataset(s) from the list."),
+            (self.btn_save_data,
+             "Save JSON data for datasets currently checked as Show."),
             (self.btn_rename, "Rename the selected dataset."),
-            (self.btn_clear_all, "Remove all loaded datasets."),
             (self.btn_move_up, "Move the selected dataset(s) up in plot order."),
             (self.btn_move_down, "Move the selected dataset(s) down in plot order."),
             (self.files_tree, "Datasets in plot order. Click 'Show' to toggle visibility."),
@@ -1235,7 +1271,8 @@ class DashboardDataPlotter(tk.Tk):
              "Plot values as percent of dataset mean (radar/cartesian only)."),
             (self.chk_compare,
              "Plot each dataset as a difference from the selected baseline."),
-            (self.baseline_menu_btn, "Choose one or more baseline datasets for comparison mode."),
+            (self.baseline_menu_btn,
+             "Choose one or more baseline datasets for comparison mode."),
             (self.plot_btn, "Plot or refresh using current settings."),
             (self.export_plot_btn, "Export the currently displayed plot data to CSV."),
             (self.prev_btn, "Go to the previous plot in history."),
@@ -1247,12 +1284,18 @@ class DashboardDataPlotter(tk.Tk):
             (self.btn_open_report, "Open an existing report JSON file."),
             (self.btn_view_report, "Preview the current report in your browser."),
             (self.btn_save_report, "Save the current report JSON file."),
+            (self.chk_report_include_meta,
+             "When checked, preview/export includes report metadata (data sources, plot settings, dates)."),
             (self.btn_export_report_html,
              "Export the report to a shareable HTML file."),
             (self.btn_export_report_pdf,
-             "Export the report to a PDF (requires weasyprint)."),
+             "Export the report to a PDF (requires reportlab)."),
             (self.btn_add_snapshot,
              "Add the current plot (with annotations) to the report."),
+            (self.btn_add_text_block,
+             "Add a text-only content block to the report."),
+            (self.btn_manage_report,
+             "Edit, remove, and reorder report snapshots and text blocks."),
             (self.chk_annotate, "Enable click-to-add text annotations on the plot."),
             (self.btn_clear_annotations,
              "Remove all annotations from the current plot."),
@@ -1373,11 +1416,13 @@ class DashboardDataPlotter(tk.Tk):
         if self.report_state is not None:
             self.report_state["annotation_format"] = dict(payload)
             self._report_dirty = True
-        self.state.analysis_settings.report_options["annotation_format"] = json.dumps(payload)
+        self.state.analysis_settings.report_options["annotation_format"] = json.dumps(
+            payload)
         self._mark_dirty()
 
     def _load_annotation_format_from_project_options(self) -> None:
-        raw = self.state.analysis_settings.report_options.get("annotation_format", "")
+        raw = self.state.analysis_settings.report_options.get(
+            "annotation_format", "")
         if not raw:
             return
         try:
@@ -1391,9 +1436,11 @@ class DashboardDataPlotter(tk.Tk):
             return
         if "annotation_format" not in self.report_state:
             return
-        payload = self._normalize_annotation_format(self.report_state.get("annotation_format", {}))
+        payload = self._normalize_annotation_format(
+            self.report_state.get("annotation_format", {}))
         self._annotation_format = dict(payload)
-        self.state.analysis_settings.report_options["annotation_format"] = json.dumps(payload)
+        self.state.analysis_settings.report_options["annotation_format"] = json.dumps(
+            payload)
 
     def configure_annotation_format(self) -> None:
         initial = self._annotation_format_payload()
@@ -1407,52 +1454,73 @@ class DashboardDataPlotter(tk.Tk):
         container = ttk.Frame(dialog, padding=10)
         container.pack(fill="both", expand=True)
 
-        ttk.Label(container, text="Font family:").grid(row=0, column=0, sticky="w")
+        ttk.Label(container, text="Font family:").grid(
+            row=0, column=0, sticky="w")
         families = sorted(set(tkfont.families(self)))
         if not families:
             families = [str(initial.get("font_family") or "Segoe UI")]
-        font_family_var = tk.StringVar(value=str(initial.get("font_family") or families[0]))
-        family_combo = ttk.Combobox(container, textvariable=font_family_var, values=families, state="normal")
-        family_combo.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 8))
+        font_family_var = tk.StringVar(
+            value=str(initial.get("font_family") or families[0]))
+        family_combo = ttk.Combobox(
+            container, textvariable=font_family_var, values=families, state="normal")
+        family_combo.grid(row=1, column=0, columnspan=2,
+                          sticky="ew", pady=(2, 8))
 
-        ttk.Label(container, text="Font size:").grid(row=2, column=0, sticky="w")
+        ttk.Label(container, text="Font size:").grid(
+            row=2, column=0, sticky="w")
         font_size_var = tk.StringVar(value=str(initial.get("font_size", 9)))
-        ttk.Entry(container, textvariable=font_size_var, width=8).grid(row=2, column=1, sticky="w")
+        ttk.Entry(container, textvariable=font_size_var,
+                  width=8).grid(row=2, column=1, sticky="w")
 
         bold_var = tk.BooleanVar(value=bool(initial.get("bold")))
         italic_var = tk.BooleanVar(value=bool(initial.get("italic")))
-        ttk.Checkbutton(container, text="Bold", variable=bold_var).grid(row=3, column=0, sticky="w", pady=(8, 0))
-        ttk.Checkbutton(container, text="Italic", variable=italic_var).grid(row=3, column=1, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(container, text="Bold", variable=bold_var).grid(
+            row=3, column=0, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(container, text="Italic", variable=italic_var).grid(
+            row=3, column=1, sticky="w", pady=(8, 0))
 
-        text_color_var = tk.StringVar(value=str(initial.get("text_color") or "#111111"))
-        arrow_color_var = tk.StringVar(value=str(initial.get("arrow_color") or "#333333"))
+        text_color_var = tk.StringVar(
+            value=str(initial.get("text_color") or "#111111"))
+        arrow_color_var = tk.StringVar(
+            value=str(initial.get("arrow_color") or "#333333"))
 
         def _pick_color(var: tk.StringVar) -> None:
             chosen = colorchooser.askcolor(color=var.get(), parent=dialog)
             if chosen and chosen[1]:
                 var.set(str(chosen[1]))
 
-        ttk.Label(container, text="Text colour:").grid(row=4, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(container, text="Text colour:").grid(
+            row=4, column=0, sticky="w", pady=(10, 0))
         color_row1 = ttk.Frame(container)
-        color_row1.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(2, 6))
-        ttk.Entry(color_row1, textvariable=text_color_var, width=16).pack(side="left")
-        ttk.Button(color_row1, text="Choose…", command=lambda: _pick_color(text_color_var)).pack(side="left", padx=(6, 0))
+        color_row1.grid(row=5, column=0, columnspan=2,
+                        sticky="ew", pady=(2, 6))
+        ttk.Entry(color_row1, textvariable=text_color_var,
+                  width=16).pack(side="left")
+        ttk.Button(color_row1, text="Choose…", command=lambda: _pick_color(
+            text_color_var)).pack(side="left", padx=(6, 0))
 
-        ttk.Label(container, text="Arrow colour:").grid(row=6, column=0, sticky="w")
+        ttk.Label(container, text="Arrow colour:").grid(
+            row=6, column=0, sticky="w")
         color_row2 = ttk.Frame(container)
-        color_row2.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(2, 8))
-        ttk.Entry(color_row2, textvariable=arrow_color_var, width=16).pack(side="left")
-        ttk.Button(color_row2, text="Choose…", command=lambda: _pick_color(arrow_color_var)).pack(side="left", padx=(6, 0))
+        color_row2.grid(row=7, column=0, columnspan=2,
+                        sticky="ew", pady=(2, 8))
+        ttk.Entry(color_row2, textvariable=arrow_color_var,
+                  width=16).pack(side="left")
+        ttk.Button(color_row2, text="Choose…", command=lambda: _pick_color(
+            arrow_color_var)).pack(side="left", padx=(6, 0))
 
-        ttk.Label(container, text="Caption offset relative to selected point (points):").grid(row=8, column=0, columnspan=2, sticky="w")
+        ttk.Label(container, text="Caption offset relative to selected point (points):").grid(
+            row=8, column=0, columnspan=2, sticky="w")
         offset_row = ttk.Frame(container)
         offset_row.grid(row=9, column=0, columnspan=2, sticky="w", pady=(2, 8))
         ttk.Label(offset_row, text="X:").pack(side="left")
         offset_x_var = tk.StringVar(value=str(initial.get("offset_x", 8)))
-        ttk.Entry(offset_row, textvariable=offset_x_var, width=7).pack(side="left", padx=(2, 10))
+        ttk.Entry(offset_row, textvariable=offset_x_var,
+                  width=7).pack(side="left", padx=(2, 10))
         ttk.Label(offset_row, text="Y:").pack(side="left")
         offset_y_var = tk.StringVar(value=str(initial.get("offset_y", 8)))
-        ttk.Entry(offset_row, textvariable=offset_y_var, width=7).pack(side="left", padx=(2, 0))
+        ttk.Entry(offset_row, textvariable=offset_y_var,
+                  width=7).pack(side="left", padx=(2, 0))
 
         btns = ttk.Frame(container)
         btns.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(8, 0))
@@ -1466,7 +1534,8 @@ class DashboardDataPlotter(tk.Tk):
             dialog.destroy()
 
         ttk.Button(btns, text="Cancel", command=_cancel).pack(side="right")
-        ttk.Button(btns, text="Apply", command=_confirm).pack(side="right", padx=(0, 6))
+        ttk.Button(btns, text="Apply", command=_confirm).pack(
+            side="right", padx=(0, 6))
 
         container.columnconfigure(0, weight=1)
         dialog.bind("<Escape>", lambda _e: _cancel(), add=True)
@@ -1569,7 +1638,8 @@ class DashboardDataPlotter(tk.Tk):
             self.configure_annotation_format()
 
         ttk.Button(btns, text="Cancel", command=_cancel).pack(side="right")
-        ttk.Button(btns, text="Add", command=_confirm).pack(side="right", padx=(0, 6))
+        ttk.Button(btns, text="Add", command=_confirm).pack(
+            side="right", padx=(0, 6))
         ttk.Button(btns, text="Format?", command=_format).pack(side="left")
 
         dialog.bind("<Escape>", lambda _e: _cancel(), add=True)
@@ -1616,7 +1686,8 @@ class DashboardDataPlotter(tk.Tk):
             dialog.destroy()
 
         ttk.Button(btns, text="Cancel", command=_cancel).pack(side="right")
-        ttk.Button(btns, text="Update", command=_update).pack(side="right", padx=(0, 6))
+        ttk.Button(btns, text="Update", command=_update).pack(
+            side="right", padx=(0, 6))
         ttk.Button(btns, text="Delete", command=_delete).pack(side="left")
 
         dialog.bind("<Escape>", lambda _e: _cancel(), add=True)
@@ -1738,8 +1809,10 @@ class DashboardDataPlotter(tk.Tk):
     def _ensure_report_state(self) -> bool:
         if self.report_state:
             if "annotation_format" not in self.report_state:
-                self.report_state["annotation_format"] = self._annotation_format_payload()
+                self.report_state["annotation_format"] = self._annotation_format_payload(
+                )
                 self._report_dirty = True
+            self._ensure_report_snapshots_list()
             return True
         confirm = messagebox.askyesno(
             "Create report",
@@ -1748,6 +1821,54 @@ class DashboardDataPlotter(tk.Tk):
         if not confirm:
             return False
         return self.new_report()
+
+    def _ensure_report_snapshots_list(self) -> list:
+        if not isinstance(self.report_state, dict):
+            return []
+        snapshots = self.report_state.get("snapshots")
+        if isinstance(snapshots, list):
+            return snapshots
+        self.report_state["snapshots"] = []
+        self._report_dirty = True
+        return self.report_state["snapshots"]
+
+    def _report_item_kind(self, item: dict) -> str:
+        if not isinstance(item, dict):
+            return "snapshot"
+        kind = str(item.get("kind", "snapshot")).strip().lower()
+        if kind in {"text", "snapshot"}:
+            return kind
+        return "snapshot"
+
+    def _report_item_display_label(self, item: dict, index: int) -> str:
+        if not isinstance(item, dict):
+            return f"{index + 1}. [invalid item]"
+        kind = self._report_item_kind(item)
+        if kind == "text":
+            fmt = str(item.get("content_format", "text")).strip().lower()
+            kind_label = "HTML" if fmt == "html" else "Text"
+        else:
+            kind_label = "Snapshot"
+        title = str(item.get("title", "")).strip()
+        if kind == "snapshot" and not title:
+            title = str(item.get("plot_title", "")).strip()
+        if not title:
+            title = kind_label
+        created_at = str(item.get("created_at", "")).strip()
+        created_date = created_at.split("T", 1)[0] if created_at else ""
+        suffix = f" ({created_date})" if created_date else ""
+        return f"{index + 1}. [{kind_label}] {title}{suffix}"
+
+    def _autosave_report_if_path(self) -> bool:
+        if not self.report_path or not self.report_state:
+            return True
+        try:
+            save_report_file(self.report_state, self.report_path)
+        except Exception as exc:
+            messagebox.showerror("Report", f"Failed to save report:\n{exc}")
+            return False
+        self._report_dirty = False
+        return True
 
     def _prompt_save_report_if_dirty(self, action_label: str) -> bool:
         if not self.report_state or not self._report_dirty:
@@ -1761,6 +1882,32 @@ class DashboardDataPlotter(tk.Tk):
         if choice:
             return self.save_report()
         return True
+
+    def _report_include_meta_enabled(self) -> bool:
+        if isinstance(self.report_state, dict):
+            raw = self.report_state.get("include_meta")
+            if isinstance(raw, bool):
+                return raw
+        return bool(self.report_hide_meta_var.get())
+
+    def _sync_report_meta_toggle_from_state(self) -> None:
+        include_meta = False
+        if isinstance(self.report_state, dict):
+            raw = self.report_state.get("include_meta")
+            if isinstance(raw, bool):
+                include_meta = raw
+            else:
+                self.report_state["include_meta"] = include_meta
+                self._report_dirty = True
+        self.report_hide_meta_var.set(include_meta)
+
+    def _on_report_include_meta_toggle(self) -> None:
+        if not isinstance(self.report_state, dict):
+            return
+        include_meta = bool(self.report_hide_meta_var.get())
+        if self.report_state.get("include_meta") != include_meta:
+            self.report_state["include_meta"] = include_meta
+            self._report_dirty = True
 
     def _prompt_report_save_path(self) -> str:
         if not self._ensure_project_title():
@@ -1833,7 +1980,7 @@ class DashboardDataPlotter(tk.Tk):
         container = ttk.Frame(dialog, padding=10)
         container.pack(fill="both", expand=True)
 
-        ttk.Label(container, text="Project title:").pack(anchor="w")
+        ttk.Label(container, text="Report title:").pack(anchor="w")
         title_var = tk.StringVar(
             value=self.project_title or "Untitled Project")
         title_entry = ttk.Entry(container, textvariable=title_var)
@@ -1841,7 +1988,7 @@ class DashboardDataPlotter(tk.Tk):
 
         ttk.Label(
             container,
-            text="New report prepared. Please add your plot snapshots and comments.",
+            text="New report prepared. Please add plot snapshots and/or text blocks.",
             wraplength=480,
             foreground="#444",
         ).pack(anchor="w", pady=(0, 12))
@@ -1878,10 +2025,13 @@ class DashboardDataPlotter(tk.Tk):
             self._report_data_sources(),
         )
         self.report_state["annotation_format"] = self._annotation_format_payload()
+        self.report_state["include_meta"] = bool(
+            self.report_hide_meta_var.get())
         self.report_path = ""
         self._report_dirty = True
         self._report_temp_assets_dir = ""
-        self.status.set("New report prepared. Add snapshots and comments.")
+        self.status.set(
+            "New report prepared. Add snapshots and/or text blocks.")
         return True
 
     def open_report(self) -> bool:
@@ -1907,7 +2057,9 @@ class DashboardDataPlotter(tk.Tk):
         os.makedirs(assets_dir, exist_ok=True)
         self._report_dirty = False
         self._report_temp_assets_dir = ""
+        self._ensure_report_snapshots_list()
         self._apply_report_annotation_format()
+        self._sync_report_meta_toggle_from_state()
         self.status.set(f"Opened report: {in_path}")
         return True
 
@@ -1915,7 +2067,10 @@ class DashboardDataPlotter(tk.Tk):
         if not self.report_state:
             self.new_report()
         if self.report_state is not None:
-            self.report_state["annotation_format"] = self._annotation_format_payload()
+            self.report_state["annotation_format"] = self._annotation_format_payload(
+            )
+            self.report_state["include_meta"] = self._report_include_meta_enabled()
+            self._ensure_report_snapshots_list()
         if not self.report_state:
             return False
         if not self._ensure_report_path():
@@ -1929,9 +2084,16 @@ class DashboardDataPlotter(tk.Tk):
         self.status.set(f"Saved report: {self.report_path}")
         return True
 
-    def _prompt_report_snapshot(self) -> tuple[str, str] | None:
+    def _prompt_report_snapshot(
+        self,
+        *,
+        initial_title: str | None = None,
+        initial_comments: str = "",
+        dialog_title: str = "Add report snapshot",
+        confirm_label: str = "Add snapshot",
+    ) -> tuple[str, str] | None:
         dialog = tk.Toplevel(self)
-        dialog.title("Add report snapshot")
+        dialog.title(dialog_title)
         dialog.transient(self)
         dialog.grab_set()
         dialog.geometry("520x360")
@@ -1942,10 +2104,13 @@ class DashboardDataPlotter(tk.Tk):
 
         ttk.Label(container, text="Snapshot title:").pack(anchor="w")
         default_title = ""
-        if self.use_plotly_var.get() and self._last_plotly_title:
-            default_title = self._last_plotly_title
-        elif hasattr(self, "ax"):
-            default_title = self.ax.get_title()
+        if initial_title is None:
+            if self.use_plotly_var.get() and self._last_plotly_title:
+                default_title = self._last_plotly_title
+            elif hasattr(self, "ax"):
+                default_title = self.ax.get_title()
+        else:
+            default_title = initial_title
         title_var = tk.StringVar(value=default_title)
         title_entry = ttk.Entry(container, textvariable=title_var)
         title_entry.pack(fill="x", pady=(2, 10))
@@ -1953,6 +2118,8 @@ class DashboardDataPlotter(tk.Tk):
         ttk.Label(container, text="Comments:").pack(anchor="w")
         text_widget = tk.Text(container, height=10, wrap="word")
         text_widget.pack(fill="both", expand=True)
+        if initial_comments:
+            text_widget.insert("1.0", initial_comments)
 
         btns = ttk.Frame(container)
         btns.pack(fill="x", pady=(10, 0))
@@ -1968,7 +2135,7 @@ class DashboardDataPlotter(tk.Tk):
             dialog.destroy()
 
         ttk.Button(btns, text="Cancel", command=_cancel).pack(side="right")
-        ttk.Button(btns, text="Add snapshot", command=_confirm).pack(
+        ttk.Button(btns, text=confirm_label, command=_confirm).pack(
             side="right", padx=(0, 6))
 
         dialog.bind("<Escape>", lambda _e: _cancel(), add=True)
@@ -1979,6 +2146,399 @@ class DashboardDataPlotter(tk.Tk):
         if not result["ok"]:
             return None
         return result["title"], result["comments"]
+
+    def _prompt_report_text_block(
+        self,
+        *,
+        initial_title: str = "",
+        initial_body: str = "",
+        initial_format: str = "text",
+        dialog_title: str = "Add text block",
+        confirm_label: str = "Add block",
+    ) -> tuple[str, str, str] | None:
+        if os.name == "nt":
+            rich_result = self._prompt_report_text_block_rich_windows(
+                initial_title=initial_title,
+                initial_body=initial_body,
+                initial_format=initial_format,
+            )
+            if rich_result == ("", "", "__cancelled__"):
+                return None
+            if rich_result is not None:
+                return rich_result
+
+        # Fallback plain Tk editor (used if rich editor is unavailable)
+        dialog = tk.Toplevel(self)
+        dialog.title(dialog_title)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry("560x380")
+        self._center_dialog(dialog)
+
+        container = ttk.Frame(dialog, padding=10)
+        container.pack(fill="both", expand=True)
+
+        ttk.Label(container, text="Block title (optional):").pack(anchor="w")
+        title_var = tk.StringVar(value=initial_title)
+        title_entry = ttk.Entry(container, textvariable=title_var)
+        title_entry.pack(fill="x", pady=(2, 10))
+
+        fmt_var = tk.StringVar(
+            value="html" if str(initial_format).strip().lower() == "html" else "text"
+        )
+        fmt_row = ttk.Frame(container)
+        fmt_row.pack(fill="x", pady=(0, 6))
+        ttk.Label(fmt_row, text="Content type:").pack(side="left")
+        ttk.Radiobutton(fmt_row, text="Plain text", value="text",
+                        variable=fmt_var).pack(side="left", padx=(8, 0))
+        ttk.Radiobutton(fmt_row, text="HTML (rich)", value="html",
+                        variable=fmt_var).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            fmt_row,
+            text="Paste rich from clipboard",
+            command=lambda: _paste_clipboard_rich(),
+        ).pack(side="right")
+        ttk.Button(
+            fmt_row,
+            text="Paste image",
+            command=lambda: _paste_clipboard_image(),
+        ).pack(side="right", padx=(0, 6))
+
+        ttk.Label(container, text="Content:").pack(anchor="w")
+        text_widget = tk.Text(container, height=12, wrap="word")
+        text_widget.pack(fill="both", expand=True)
+        if initial_body:
+            text_widget.insert("1.0", initial_body)
+
+        ttk.Label(
+            container,
+            text="Paste plain notes or raw HTML (e.g. copied web/doc extracts, including <img> tags). HTML preview/export renders directly.",
+            wraplength=520,
+            foreground="#555",
+        ).pack(anchor="w", pady=(6, 0))
+
+        btns = ttk.Frame(container)
+        btns.pack(fill="x", pady=(10, 0))
+        result = {"ok": False, "title": "", "body": "", "format": "text"}
+
+        def _insert_at_cursor(text_value: str) -> None:
+            if not text_value:
+                return
+            try:
+                text_widget.insert("insert", text_value)
+                text_widget.focus_set()
+            except Exception:
+                pass
+
+        def _set_editor_content(text_value: str) -> None:
+            text_widget.delete("1.0", "end")
+            if text_value:
+                text_widget.insert("1.0", text_value)
+            text_widget.focus_set()
+
+        def _paste_clipboard_rich() -> None:
+            html_clip = self._get_clipboard_html_fragment_windows()
+            if html_clip:
+                fmt_var.set("html")
+                _set_editor_content(html_clip)
+                return
+            try:
+                plain = self.clipboard_get()
+            except Exception:
+                plain = ""
+            if plain:
+                fmt_var.set("text")
+                _set_editor_content(str(plain))
+                return
+            messagebox.showinfo(
+                "Clipboard",
+                "No text/HTML content was found in the clipboard.",
+                parent=dialog,
+            )
+
+        def _paste_clipboard_image() -> None:
+            rel_path = self._save_clipboard_image_report_asset()
+            if not rel_path:
+                messagebox.showinfo(
+                    "Clipboard",
+                    "No image was found in the clipboard.",
+                    parent=dialog,
+                )
+                return
+            fmt_var.set("html")
+            tag = f'<img src="{html.escape(rel_path, quote=True)}" alt="Pasted image" />'
+            current = text_widget.get("1.0", "end").strip()
+            if current:
+                _insert_at_cursor("\n" + tag + "\n")
+            else:
+                _set_editor_content(tag)
+
+        def _confirm():
+            result["ok"] = True
+            result["title"] = title_var.get().strip()
+            result["body"] = text_widget.get("1.0", "end").strip()
+            result["format"] = "html" if fmt_var.get() == "html" else "text"
+            dialog.destroy()
+
+        def _cancel():
+            dialog.destroy()
+
+        ttk.Button(btns, text="Cancel", command=_cancel).pack(side="right")
+        ttk.Button(btns, text=confirm_label, command=_confirm).pack(
+            side="right", padx=(0, 6))
+
+        dialog.bind("<Escape>", lambda _e: _cancel(), add=True)
+        dialog.protocol("WM_DELETE_WINDOW", _cancel)
+        title_entry.focus_set()
+        self.wait_window(dialog)
+
+        if not result["ok"]:
+            return None
+        return result["title"], result["body"], result["format"]
+
+    def _prompt_report_text_block_rich_windows(
+        self,
+        *,
+        initial_title: str,
+        initial_body: str,
+        initial_format: str,
+    ) -> tuple[str, str, str] | None:
+        if os.name != "nt":
+            return None
+        html_body = ""
+        if str(initial_format).strip().lower() == "html":
+            html_body = self._render_report_rich_html_block(
+                initial_body,
+                asset_prefix="",
+                embed_assets=True,
+                asset_root=self._current_report_assets_dir(),
+            )
+        else:
+            html_body = self._plain_text_to_editor_html(initial_body)
+
+        result = self._run_windows_rich_html_editor(
+            {
+                "title": initial_title,
+                "html": html_body,
+            }
+        )
+        if result is None:
+            return None
+        if result.get("cancelled"):
+            return ("", "", "__cancelled__")
+        raw_title = str(result.get("title", "")).strip()
+        raw_html = str(result.get("html", "") or "")
+        normalized_html = self._normalize_report_rich_html_for_storage(raw_html)
+        return raw_title, normalized_html, "html"
+
+    def _run_windows_rich_html_editor(self, payload: dict[str, str]) -> dict | None:
+        src_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        temp_dir = tempfile.mkdtemp(prefix="ddp_rich_editor_")
+        in_path = os.path.join(temp_dir, "input.json")
+        out_path = os.path.join(temp_dir, "output.json")
+        try:
+            with open(in_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False)
+
+            env = dict(os.environ)
+            py_path = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = src_root + (os.pathsep + py_path if py_path else "")
+            cmd = [
+                sys.executable,
+                "-m",
+                "dashboard_data_plotter.ui.rich_html_editor",
+                in_path,
+                out_path,
+            ]
+            proc = subprocess.run(
+                cmd,
+                cwd=os.path.abspath(os.path.join(src_root, "..")),
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            if proc.returncode != 0:
+                stderr = (proc.stderr or "").strip()
+                if "No module named 'webview'" in stderr or "No module named webview" in stderr:
+                    messagebox.showinfo(
+                        "Rich editor unavailable",
+                        "The Windows rich text editor requires the optional package 'pywebview'.\n\n"
+                        "Install it to enable Word/web-style paste and editing.\n\n"
+                        "Falling back to the basic text editor for now.",
+                    )
+                    return None
+                messagebox.showerror(
+                    "Rich editor",
+                    "Failed to open the rich content editor.\n\n"
+                    + (stderr or f"Exit code {proc.returncode}")
+                )
+                return None
+            if not os.path.isfile(out_path):
+                return None
+            with open(out_path, "r", encoding="utf-8") as handle:
+                result = json.load(handle)
+            if not isinstance(result, dict):
+                return {"cancelled": True}
+            if result.get("ok"):
+                return result
+            return {"cancelled": True}
+        except Exception as exc:
+            messagebox.showerror("Rich editor", f"Failed to open rich editor:\n{exc}")
+            return None
+        finally:
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+    def _plain_text_to_editor_html(self, text: str) -> str:
+        if not text:
+            return ""
+        parts = []
+        for line in str(text).splitlines():
+            if line.strip():
+                parts.append(f"<p>{html.escape(line)}</p>")
+            else:
+                parts.append("<p><br></p>")
+        return "".join(parts)
+
+    def _normalize_report_rich_html_for_storage(self, html_text: str) -> str:
+        html_text = self._sanitize_report_html_block(html_text or "")
+        if not html_text:
+            return ""
+
+        def _replace_data_uri_img(match: re.Match) -> str:
+            quote = match.group(1)
+            src = (match.group(2) or "").strip()
+            lower = src.lower()
+            if not lower.startswith("data:image/"):
+                return match.group(0)
+            rel_path = self._save_data_uri_image_report_asset(src)
+            if not rel_path:
+                return match.group(0)
+            return f'src={quote}{html.escape(rel_path, quote=True)}{quote}'
+
+        return re.sub(r"src=(['\"])([^'\"]+)\1", _replace_data_uri_img, html_text, flags=re.IGNORECASE)
+
+    def _save_data_uri_image_report_asset(self, data_uri: str) -> str:
+        match = re.match(r"^data:image/([a-zA-Z0-9.+-]+);base64,(.+)$", data_uri, flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            return ""
+        subtype = (match.group(1) or "png").lower()
+        b64 = match.group(2).strip()
+        ext = {
+            "jpeg": ".jpg",
+            "jpg": ".jpg",
+            "png": ".png",
+            "gif": ".gif",
+            "bmp": ".bmp",
+            "webp": ".webp",
+        }.get(subtype, ".png")
+        try:
+            blob = base64.b64decode(b64, validate=False)
+        except Exception:
+            return ""
+        rel_name = os.path.join("rich", f"richimg_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}{ext}")
+        out_path = os.path.join(self._current_report_assets_dir(), rel_name)
+        try:
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            with open(out_path, "wb") as handle:
+                handle.write(blob)
+        except Exception:
+            return ""
+        return rel_name.replace("\\", "/")
+
+    def _get_clipboard_html_fragment_windows(self) -> str:
+        if os.name != "nt":
+            return ""
+        try:
+            fmt_id = ctypes.windll.user32.RegisterClipboardFormatW("HTML Format")
+        except Exception:
+            return ""
+        if not fmt_id:
+            return ""
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        if not user32.OpenClipboard(None):
+            return ""
+        try:
+            handle = user32.GetClipboardData(fmt_id)
+            if not handle:
+                return ""
+            ptr = kernel32.GlobalLock(handle)
+            if not ptr:
+                return ""
+            try:
+                size = kernel32.GlobalSize(handle)
+                if not size:
+                    return ""
+                raw = ctypes.string_at(ptr, size)
+            finally:
+                kernel32.GlobalUnlock(handle)
+        finally:
+            user32.CloseClipboard()
+
+        # CF_HTML payload is ASCII header + HTML bytes. Keep embedded fragment when possible.
+        text = raw.decode("utf-8", errors="replace").rstrip("\x00")
+        if not text:
+            return ""
+        if "StartFragment:" not in text:
+            return text
+        try:
+            start_html = self._cf_html_offset(text, "StartHTML")
+            end_html = self._cf_html_offset(text, "EndHTML")
+            start_frag = self._cf_html_offset(text, "StartFragment")
+            end_frag = self._cf_html_offset(text, "EndFragment")
+            if min(start_html, end_html, start_frag, end_frag) < 0:
+                return text
+            html_bytes = raw[start_html:end_html]
+            html_text = html_bytes.decode("utf-8", errors="replace")
+            rel_start = max(0, start_frag - start_html)
+            rel_end = max(rel_start, end_frag - start_html)
+            fragment = html_text[rel_start:rel_end]
+            return fragment.strip() or html_text.strip()
+        except Exception:
+            return text
+
+    def _cf_html_offset(self, header_text: str, key: str) -> int:
+        match = re.search(rf"{re.escape(key)}:(\d+)", header_text)
+        if not match:
+            return -1
+        try:
+            return int(match.group(1))
+        except Exception:
+            return -1
+
+    def _save_clipboard_image_report_asset(self) -> str:
+        try:
+            from PIL import ImageGrab
+        except Exception:
+            return ""
+        try:
+            clip = ImageGrab.grabclipboard()
+        except Exception:
+            return ""
+        if clip is None:
+            return ""
+        image_obj = None
+        if hasattr(clip, "save"):
+            image_obj = clip
+        elif isinstance(clip, list):
+            # File list clipboard content; not handled here.
+            return ""
+        if image_obj is None:
+            return ""
+
+        assets_dir = self._current_report_assets_dir()
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        rel_name = f"clipimg_{stamp}_{uuid.uuid4().hex[:6]}.png"
+        out_path = os.path.join(assets_dir, rel_name)
+        try:
+            image_obj.save(out_path, format="PNG")
+        except Exception:
+            return ""
+        return rel_name
 
     def add_report_snapshot(self) -> None:
         if not self._ensure_report_state():
@@ -2013,8 +2573,10 @@ class DashboardDataPlotter(tk.Tk):
             html_name = f"plotly_{plot_part}_{metric_part}_{timestamp}.html"
             html_path = os.path.join(assets_dir, html_name)
             try:
+                fig_for_report = go.Figure(self._last_plotly_fig)
+                fig_for_report.update_layout(title=None)
                 pio.write_html(
-                    self._last_plotly_fig,
+                    fig_for_report,
                     file=html_path,
                     auto_open=False,
                     include_plotlyjs="cdn",
@@ -2027,12 +2589,27 @@ class DashboardDataPlotter(tk.Tk):
         else:
             image_name = f"plot_{plot_part}_{metric_part}_{timestamp}.png"
             image_path = os.path.join(assets_dir, image_name)
+            saved_titles: list[tuple[Any, str]] = []
             try:
+                # Save report snapshots without embedded plot titles; report headings handle titling.
+                for axis in getattr(self.fig, "axes", []):
+                    try:
+                        current_title = axis.get_title()
+                        saved_titles.append((axis, current_title))
+                        axis.set_title("")
+                    except Exception:
+                        continue
                 self.fig.savefig(image_path, dpi=200, bbox_inches="tight")
             except Exception as exc:
                 messagebox.showerror(
                     "Report", f"Failed to save plot snapshot:\n{exc}")
                 return
+            finally:
+                for axis, axis_title in saved_titles:
+                    try:
+                        axis.set_title(axis_title)
+                    except Exception:
+                        pass
             assets["image"] = image_name
 
         plot_title = ""
@@ -2044,6 +2621,7 @@ class DashboardDataPlotter(tk.Tk):
         snapshot = {
             "id": uuid.uuid4().hex,
             "created_at": datetime.now().replace(microsecond=0).isoformat(),
+            "user_title": "" if (snap_title or "").strip() == (plot_title or "").strip() else snap_title,
             "title": snap_title or plot_title,
             "plot_type": plot_type,
             "plot_backend": plot_backend,
@@ -2054,38 +2632,237 @@ class DashboardDataPlotter(tk.Tk):
             "assets": assets,
         }
 
-        snapshots = self.report_state.setdefault("snapshots", [])
-        if isinstance(snapshots, list):
-            snapshots.append(snapshot)
-        else:
-            self.report_state["snapshots"] = [snapshot]
+        snapshots = self._ensure_report_snapshots_list()
+        snapshots.append(snapshot)
         self._report_dirty = True
-        if self.report_path:
-            try:
-                save_report_file(self.report_state, self.report_path)
-                self._report_dirty = False
-            except Exception as exc:
-                messagebox.showerror(
-                    "Report", f"Failed to save report:\n{exc}")
-                return
+        if not self._autosave_report_if_path():
+            return
 
         self.status.set("Added snapshot to report.")
+
+    def add_report_text_block(self) -> None:
+        if not self._ensure_report_state():
+            return
+        prompt = self._prompt_report_text_block()
+        if prompt is None:
+            return
+        block_title, block_body, block_format = prompt
+        if not block_title and not block_body:
+            messagebox.showinfo("Report", "Nothing to add.")
+            return
+
+        block = {
+            "id": uuid.uuid4().hex,
+            "kind": "text",
+            "created_at": datetime.now().replace(microsecond=0).isoformat(),
+            "title": block_title,
+            "content": block_body,
+            "content_format": block_format,
+        }
+        snapshots = self._ensure_report_snapshots_list()
+        snapshots.append(block)
+        self._report_dirty = True
+        if not self._autosave_report_if_path():
+            return
+        self.status.set("Added text block to report.")
+
+    def manage_report_content(self) -> None:
+        if not self._ensure_report_state():
+            return
+        snapshots = self._ensure_report_snapshots_list()
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Manage report content")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry("760x420")
+        self._center_dialog(dialog)
+
+        container = ttk.Frame(dialog, padding=10)
+        container.pack(fill="both", expand=True)
+        container.columnconfigure(0, weight=1)
+        container.columnconfigure(1, weight=0)
+        container.rowconfigure(1, weight=1)
+
+        ttk.Label(
+            container,
+            text="Edit, remove, or reorder report snapshots and text blocks.",
+            foreground="#444",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+
+        list_frame = ttk.Frame(container)
+        list_frame.grid(row=1, column=0, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+
+        listbox = tk.Listbox(list_frame, activestyle="dotbox")
+        listbox.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(
+            list_frame, orient="vertical", command=listbox.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        listbox.configure(yscrollcommand=scrollbar.set)
+
+        right = ttk.Frame(container)
+        right.grid(row=1, column=1, sticky="ns", padx=(10, 0))
+
+        def _selected_index() -> int | None:
+            sel = listbox.curselection()
+            if not sel:
+                return None
+            idx = int(sel[0])
+            if idx < 0 or idx >= len(snapshots):
+                return None
+            return idx
+
+        def _refresh(select_index: int | None = None) -> None:
+            listbox.delete(0, "end")
+            for idx, item in enumerate(snapshots):
+                listbox.insert(
+                    "end", self._report_item_display_label(item, idx))
+            if not snapshots:
+                return
+            if select_index is None:
+                select_index = min(len(snapshots) - 1, 0)
+            select_index = max(0, min(select_index, len(snapshots) - 1))
+            listbox.selection_clear(0, "end")
+            listbox.selection_set(select_index)
+            listbox.activate(select_index)
+            listbox.see(select_index)
+
+        def _commit_status(msg: str) -> None:
+            self._report_dirty = True
+            if not self._autosave_report_if_path():
+                return
+            self.status.set(msg)
+
+        def _add_text() -> None:
+            prompt = self._prompt_report_text_block()
+            if prompt is None:
+                return
+            block_title, block_body, block_format = prompt
+            if not block_title and not block_body:
+                return
+            snapshots.append(
+                {
+                    "id": uuid.uuid4().hex,
+                    "kind": "text",
+                    "created_at": datetime.now().replace(microsecond=0).isoformat(),
+                    "title": block_title,
+                    "content": block_body,
+                    "content_format": block_format,
+                }
+            )
+            _refresh(len(snapshots) - 1)
+            _commit_status("Added text block to report.")
+
+        def _edit_selected() -> None:
+            idx = _selected_index()
+            if idx is None:
+                return
+            item = snapshots[idx]
+            if not isinstance(item, dict):
+                messagebox.showerror(
+                    "Report", "Selected report item is invalid.")
+                return
+            kind = self._report_item_kind(item)
+            if kind == "text":
+                prompt = self._prompt_report_text_block(
+                    initial_title=str(item.get("title", "")),
+                    initial_body=str(item.get("content", "")),
+                    initial_format=str(item.get("content_format", "text")),
+                    dialog_title="Edit text block",
+                    confirm_label="Save changes",
+                )
+                if prompt is None:
+                    return
+                title, body, content_format = prompt
+                item["title"] = title
+                item["content"] = body
+                item["content_format"] = "html" if content_format == "html" else "text"
+                _refresh(idx)
+                _commit_status("Updated text block.")
+                return
+
+            prompt = self._prompt_report_snapshot(
+                initial_title=str(item.get("title", "")),
+                initial_comments=str(item.get("comments", "")),
+                dialog_title="Edit snapshot details",
+                confirm_label="Save changes",
+            )
+            if prompt is None:
+                return
+            title, comments = prompt
+            item["user_title"] = "" if (title or "").strip() == str(
+                item.get("plot_title", "")).strip() else title
+            item["title"] = title or str(item.get("plot_title", "")).strip()
+            item["comments"] = comments
+            _refresh(idx)
+            _commit_status("Updated snapshot details.")
+
+        def _delete_selected() -> None:
+            idx = _selected_index()
+            if idx is None:
+                return
+            item = snapshots[idx]
+            kind = self._report_item_kind(item) if isinstance(
+                item, dict) else "snapshot"
+            kind_label = "text block" if kind == "text" else "snapshot"
+            if not messagebox.askyesno("Remove report item", f"Remove selected {kind_label}?"):
+                return
+            del snapshots[idx]
+            next_idx = min(idx, len(snapshots) - 1) if snapshots else None
+            _refresh(next_idx)
+            _commit_status(f"Removed {kind_label} from report.")
+
+        def _move_selected(delta: int) -> None:
+            idx = _selected_index()
+            if idx is None:
+                return
+            new_idx = idx + delta
+            if new_idx < 0 or new_idx >= len(snapshots):
+                return
+            snapshots[idx], snapshots[new_idx] = snapshots[new_idx], snapshots[idx]
+            _refresh(new_idx)
+            _commit_status("Reordered report content.")
+
+        ttk.Button(right, text="Add text...", command=_add_text, width=14).pack(
+            fill="x", pady=(0, 6))
+        ttk.Button(right, text="Edit selected...", command=_edit_selected, width=14).pack(
+            fill="x", pady=(0, 6))
+        ttk.Button(right, text="Remove", command=_delete_selected, width=14).pack(
+            fill="x", pady=(0, 12))
+        ttk.Button(right, text="Move up", command=lambda: _move_selected(-1), width=14).pack(
+            fill="x", pady=(0, 6))
+        ttk.Button(right, text="Move down", command=lambda: _move_selected(1), width=14).pack(
+            fill="x", pady=(0, 12))
+        ttk.Button(right, text="Close", command=dialog.destroy,
+                   width=14).pack(fill="x")
+
+        listbox.bind("<Double-Button-1>",
+                     lambda _e: _edit_selected(), add=True)
+        dialog.bind("<Escape>", lambda _e: dialog.destroy(), add=True)
+        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+
+        _refresh(0 if snapshots else None)
+        self.wait_window(dialog)
 
     def _build_report_html(
         self,
         report: dict,
         asset_prefix: str,
         pdf_mode: bool,
+        include_meta: bool = True,
         embed_assets: bool = False,
         asset_root: str = "",
     ) -> str:
         title = html.escape(str(report.get("title", "Report")))
-        project_title = html.escape(str(report.get("project_title", "")))
         created_at = html.escape(str(report.get("created_at", "")))
         updated_at = html.escape(str(report.get("updated_at", "")))
 
         data_sources = report.get("data_sources", [])
         snapshots = report.get("snapshots", [])
+        if not isinstance(snapshots, list):
+            snapshots = []
 
         css = """
         body { font-family: "Segoe UI", Arial, sans-serif; color: #1b1b1b; margin: 24px; }
@@ -2095,12 +2872,17 @@ class DashboardDataPlotter(tk.Tk):
         .snapshot { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 18px; }
         .snapshot h3 { margin-top: 0; }
         .snapshot-body { display: flex; gap: 16px; align-items: flex-start; }
-        .snapshot-left { flex: 0 0 72%; }
-        .snapshot-right { flex: 0 0 28%; }
+        .snapshot-left { flex: 0 0 60%; }
+        .snapshot-right { flex: 0 0 40%; }
         .plot-img { width: 100%; height: auto; border: 1px solid #ccc; background: #fafafa; }
-        .plot-frame { width: 100%; height: 320px; border: 1px solid #ccc; }
+        .plot-frame { width: 100%; height: 280px; border: 1px solid #ccc; }
         .settings { font-size: 0.9em; color: #444; }
-        .comments { font-size: 1.35em; font-weight: 700; line-height: 1.5; margin-top: 10px; color: #1f4aa8; }
+        .comments { font-size: 0.98em; font-weight: 600; line-height: 1.35; margin-top: 8px; color: #1f4aa8; }
+        .rich-content { margin-top: 8px; line-height: 1.35; color: #222; }
+        .rich-content img { max-width: 100%; height: auto; }
+        .rich-content table { border-collapse: collapse; max-width: 100%; display: block; overflow-x: auto; }
+        .rich-content th, .rich-content td { border: 1px solid #d8d8d8; padding: 4px 6px; }
+        .rich-content pre { white-space: pre-wrap; background: #f7f7f7; padding: 8px; border: 1px solid #e2e2e2; }
         .pill { display: inline-block; background: #f0f0f0; padding: 2px 8px; border-radius: 10px; font-size: 0.85em; }
         @media (max-width: 900px) {
           .snapshot-body { flex-direction: column; }
@@ -2118,11 +2900,12 @@ class DashboardDataPlotter(tk.Tk):
             "</head>",
             "<body>",
             f"<h1>{title}</h1>",
-            f"<div class=\"meta\">Project: <strong>{project_title}</strong></div>",
-            f"<div class=\"meta\">Created: {created_at} | Updated: {updated_at}</div>",
         ]
+        if include_meta:
+            lines.append(
+                f"<div class=\"meta\">Created: {created_at} | Updated: {updated_at}</div>")
 
-        if data_sources:
+        if include_meta and data_sources:
             lines.append("<div class=\"section\"><h2>Data Sources</h2><ul>")
             for item in data_sources:
                 display = html.escape(str(item.get("display", "")))
@@ -2133,12 +2916,52 @@ class DashboardDataPlotter(tk.Tk):
                     f"<li>{display} <span class=\"pill\">{source_id}</span></li>")
             lines.append("</ul></div>")
 
-        lines.append("<div class=\"section\"><h2>Snapshots</h2>")
+        lines.append("<div class=\"section\"><h2>Analysis</h2>")
         if not snapshots:
-            lines.append("<p>No snapshots yet.</p>")
+            lines.append("<p>No report content yet.</p>")
         else:
             for snap in snapshots:
-                snap_title = html.escape(str(snap.get("title", "Snapshot")))
+                item_kind = self._report_item_kind(
+                    snap) if isinstance(snap, dict) else "snapshot"
+                if item_kind == "text":
+                    raw_title = str(snap.get("title", "")).strip()
+                    body = str(snap.get("content", ""))
+                    content_format = str(
+                        snap.get("content_format", "text")).strip().lower()
+                    snap_time = html.escape(str(snap.get("created_at", "")))
+                    snap_date = snap_time.split("T", 1)[0] if snap_time else ""
+                    lines.append("<div class=\"snapshot\">")
+                    if raw_title:
+                        lines.append(f"<h3>{html.escape(raw_title)}</h3>")
+                    elif include_meta:
+                        lines.append("<h3>Text block</h3>")
+                    if include_meta:
+                        lines.append(
+                            f"<div class=\"meta\">Added: {snap_date}</div>")
+                    if body:
+                        if content_format == "html":
+                            lines.append(
+                                f"<div class=\"rich-content\">{self._render_report_rich_html_block(body, asset_prefix=asset_prefix, embed_assets=embed_assets, asset_root=asset_root)}</div>")
+                        else:
+                            lines.append(
+                                f"<div class=\"comments\">{self._render_markdown_html(body)}</div>")
+                    else:
+                        lines.append("<p><em>Empty text block.</em></p>")
+                    lines.append("</div>")
+                    continue
+                raw_title = str(snap.get("title", "")).strip()
+                raw_user_title = str(snap.get("user_title", "")).strip()
+                raw_plot_title = str(snap.get("plot_title", "")).strip()
+                effective_user_title = raw_user_title
+                if raw_plot_title and effective_user_title == raw_plot_title:
+                    effective_user_title = ""
+                if include_meta:
+                    display_title = raw_title or "Snapshot"
+                else:
+                    # Metadata-hidden mode should not show auto/original plot titles.
+                    # Only an explicit user snapshot title is rendered.
+                    display_title = effective_user_title
+                snap_title = html.escape(display_title)
                 snap_time = html.escape(str(snap.get("created_at", "")))
                 snap_date = snap_time.split("T", 1)[0] if snap_time else ""
                 comments = str(snap.get("comments", ""))
@@ -2146,9 +2969,11 @@ class DashboardDataPlotter(tk.Tk):
                     snap.get("assets", {}), dict) else {}
 
                 lines.append("<div class=\"snapshot\">")
-                lines.append(f"<h3>{snap_title}</h3>")
-                lines.append(
-                    f"<div class=\"meta\">Captured: {snap_date}</div>")
+                if display_title:
+                    lines.append(f"<h3>{snap_title}</h3>")
+                if include_meta:
+                    lines.append(
+                        f"<div class=\"meta\">Captured: {snap_date}</div>")
 
                 lines.append("<div class=\"snapshot-body\">")
                 lines.append("<div class=\"snapshot-left\">")
@@ -2160,7 +2985,7 @@ class DashboardDataPlotter(tk.Tk):
                         data_uri = self._load_asset_data_uri(img_path)
                         if data_uri:
                             lines.append(
-                                f"<img class=\"plot-img\" src=\"{data_uri}\" alt=\"Plot snapshot\" />")
+                                f"<img class=\"plot-img\" src=\"{data_uri}\" alt=\"Plot image\" />")
                         else:
                             lines.append(
                                 "<p><em>Image snapshot missing.</em></p>")
@@ -2168,7 +2993,7 @@ class DashboardDataPlotter(tk.Tk):
                         img_path = html.escape(os.path.join(
                             asset_prefix, img_rel).replace("\\", "/"))
                         lines.append(
-                            f"<img class=\"plot-img\" src=\"{img_path}\" alt=\"Plot snapshot\" />")
+                            f"<img class=\"plot-img\" src=\"{img_path}\" alt=\"Plot image\" />")
                 elif html_rel and not pdf_mode:
                     if embed_assets and asset_root:
                         html_path = os.path.join(asset_root, html_rel)
@@ -2196,7 +3021,7 @@ class DashboardDataPlotter(tk.Tk):
                 lines.append("<div class=\"snapshot-right\">")
 
                 settings = snap.get("plot_settings", {})
-                if isinstance(settings, dict):
+                if include_meta and isinstance(settings, dict):
                     lines.append(
                         "<div class=\"settings\"><strong>Plot settings:</strong><ul>")
                     hidden_keys = {
@@ -2285,6 +3110,76 @@ class DashboardDataPlotter(tk.Tk):
         text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", text)
         return text
 
+    def _sanitize_report_html_block(self, text: str) -> str:
+        if not text:
+            return ""
+        # Allow pasted rich HTML, but strip active scripting content.
+        text = re.sub(r"(?is)<script\b[^>]*>.*?</script>", "", text)
+        text = re.sub(r"(?is)<iframe\b[^>]*>.*?</iframe>", "", text)
+        text = re.sub(r"(?is)<object\b[^>]*>.*?</object>", "", text)
+        text = re.sub(r"(?is)<embed\b[^>]*>", "", text)
+        return text
+
+    def _render_report_rich_html_block(
+        self,
+        text: str,
+        *,
+        asset_prefix: str,
+        embed_assets: bool,
+        asset_root: str,
+    ) -> str:
+        html_block = self._sanitize_report_html_block(text)
+        if not html_block:
+            return ""
+
+        def _replace_img_src(match: re.Match) -> str:
+            quote = match.group(1)
+            src = match.group(2).strip()
+            lower_src = src.lower()
+            if lower_src.startswith(("http://", "https://", "data:", "file://")):
+                return match.group(0)
+            rel = src.replace("\\", "/").lstrip("./")
+            if not rel:
+                return match.group(0)
+            if embed_assets and asset_root:
+                data_uri = self._load_asset_data_uri(os.path.join(asset_root, rel))
+                if data_uri:
+                    return f'src={quote}{data_uri}{quote}'
+            if asset_prefix:
+                joined = os.path.join(asset_prefix, rel).replace("\\", "/")
+                return f'src={quote}{html.escape(joined, quote=True)}{quote}'
+            return match.group(0)
+
+        return re.sub(r"src=(['\"])([^'\"]+)\1", _replace_img_src, html_block, flags=re.IGNORECASE)
+
+    def _iter_text_block_asset_relpaths(self, report: dict) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        snapshots = report.get("snapshots", []) if isinstance(report, dict) else []
+        if not isinstance(snapshots, list):
+            return out
+        for item in snapshots:
+            if not isinstance(item, dict) or self._report_item_kind(item) != "text":
+                continue
+            if str(item.get("content_format", "text")).strip().lower() != "html":
+                continue
+            body = str(item.get("content", ""))
+            if not body:
+                continue
+            for match in re.finditer(r"(?i)<img\b[^>]*\bsrc=(['\"])([^'\"]+)\1", body):
+                src = (match.group(2) or "").strip()
+                if not src:
+                    continue
+                low = src.lower()
+                if low.startswith(("http://", "https://", "data:", "file://")):
+                    continue
+                rel = src.replace("\\", "/").lstrip("./")
+                if not rel or rel in seen:
+                    continue
+                seen.add(rel)
+                out.append(rel)
+        return out
+
     def export_report_html(self) -> None:
         if not self.report_state:
             messagebox.showinfo(
@@ -2313,6 +3208,7 @@ class DashboardDataPlotter(tk.Tk):
             self.report_state,
             "",
             pdf_mode=False,
+            include_meta=self._report_include_meta_enabled(),
             embed_assets=True,
             asset_root=report_assets,
         )
@@ -2328,15 +3224,6 @@ class DashboardDataPlotter(tk.Tk):
         if not self.report_state:
             messagebox.showinfo(
                 "Export report", "Open or create a report first.")
-            return
-        try:
-            import weasyprint  # type: ignore
-        except Exception:
-            messagebox.showerror(
-                "Export report",
-                "PDF export requires the optional package 'weasyprint'.\n\n"
-                "Install it in your environment to enable PDF export.",
-            )
             return
 
         base_name = ""
@@ -2357,47 +3244,30 @@ class DashboardDataPlotter(tk.Tk):
         if not out_path:
             return
 
-        export_assets_dir = os.path.splitext(out_path)[0] + "_assets"
-        os.makedirs(export_assets_dir, exist_ok=True)
-
-        copy_errors = []
         report_assets = self._current_report_assets_dir()
-        for snap in self.report_state.get("snapshots", []):
-            assets = snap.get("assets", {})
-            if not isinstance(assets, dict):
-                continue
-            rel_path = assets.get("image")
-            if not rel_path:
-                continue
-            src_path = os.path.join(report_assets, rel_path)
-            dst_path = os.path.join(export_assets_dir, rel_path)
-            if os.path.isfile(src_path):
-                try:
-                    shutil.copy2(src_path, dst_path)
-                except PermissionError:
-                    copy_errors.append(
-                        f"Asset in use, could not copy: {rel_path}")
-                except OSError as exc:
-                    copy_errors.append(
-                        f"Failed to copy {rel_path}: {exc}")
-
-        asset_prefix = os.path.basename(export_assets_dir)
-        html_text = self._build_report_html(
-            self.report_state, asset_prefix, pdf_mode=True)
         try:
-            base_dir = os.path.dirname(out_path)
-            weasyprint.HTML(string=html_text,
-                            base_url=base_dir).write_pdf(out_path)
+            warnings = export_report_pdf_file(
+                self.report_state,
+                report_assets,
+                out_path,
+                include_meta=self._report_include_meta_enabled(),
+            )
+        except ImportError:
+            messagebox.showerror(
+                "Export report",
+                "PDF export requires the optional package 'reportlab'.\n\n"
+                "Install it in your environment to enable PDF export.",
+            )
+            return
         except Exception as exc:
             messagebox.showerror("Report", f"Failed to export PDF:\n{exc}")
             return
         self.status.set(f"Exported report PDF: {out_path}")
-        if copy_errors:
+        if warnings:
             messagebox.showwarning(
                 "Report export",
-                "Report PDF saved, but some assets could not be copied.\n\n"
-                + "\n".join(copy_errors)
-                + "\n\nClose any open preview tabs and export again to copy all assets.",
+                "Report PDF saved with some warnings.\n\n" +
+                "\n".join(warnings),
             )
 
     def view_report(self) -> None:
@@ -2416,7 +3286,9 @@ class DashboardDataPlotter(tk.Tk):
         os.makedirs(export_assets_dir, exist_ok=True)
 
         report_assets = self._current_report_assets_dir()
-        for snap in self.report_state.get("snapshots", []):
+        for snap in self._ensure_report_snapshots_list():
+            if not isinstance(snap, dict) or self._report_item_kind(snap) != "snapshot":
+                continue
             assets = snap.get("assets", {})
             if not isinstance(assets, dict):
                 continue
@@ -2428,9 +3300,20 @@ class DashboardDataPlotter(tk.Tk):
                 dst_path = os.path.join(export_assets_dir, rel_path)
                 if os.path.isfile(src_path):
                     shutil.copy2(src_path, dst_path)
+        for rel_path in self._iter_text_block_asset_relpaths(self.report_state):
+            src_path = os.path.join(report_assets, rel_path)
+            dst_path = os.path.join(export_assets_dir, rel_path)
+            if not os.path.isfile(src_path):
+                continue
+            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+            shutil.copy2(src_path, dst_path)
 
         html_text = self._build_report_html(
-            self.report_state, "assets", pdf_mode=False)
+            self.report_state,
+            "assets",
+            pdf_mode=False,
+            include_meta=self._report_include_meta_enabled(),
+        )
         out_path = os.path.join(temp_dir, "report_preview.html")
         try:
             with open(out_path, "w", encoding="utf-8") as handle:
@@ -2446,7 +3329,7 @@ class DashboardDataPlotter(tk.Tk):
         state = "normal" if self.compare_var.get() else "disabled"
         self.baseline_menu_btn.configure(state=state)
         if not self.compare_var.get():
-            self._close_baseline_popup()
+            self._close_baseline_popup(apply_selection=False)
 
     def _set_plot_type_controls_state(self):
         plot_type = (self.plot_type_var.get() or "radar").strip().lower()
@@ -2581,19 +3464,23 @@ class DashboardDataPlotter(tk.Tk):
         bottom_margin = min(0.22 + extra * 0.004, 0.42)
         return font_size, bottom_margin
 
-    def _on_plot_type_change(self):
+    def _on_plot_type_change(self, apply_default_agg=True):
         plot_type = self.plot_type_var.get()
         is_bar = (plot_type == "bar")
         if hasattr(self, "agg_combo"):
             if plot_type == "timeseries":
                 self.agg_combo["values"] = [
                     "raw", "pedal stroke", "roll 360deg"]
-                if self.agg_var.get() not in self.agg_combo["values"]:
+                if apply_default_agg:
+                    self.agg_var.set("raw")
+                elif self.agg_var.get() not in self.agg_combo["values"]:
                     self.agg_var.set("raw")
             else:
                 self.agg_combo["values"] = [
                     "mean", "median", "10% trimmed mean"]
-                if self.agg_var.get() not in self.agg_combo["values"]:
+                if apply_default_agg:
+                    self.agg_var.set("mean" if is_bar else "median")
+                elif self.agg_var.get() not in self.agg_combo["values"]:
                     self.agg_var.set("median")
         if hasattr(self, "rb_percent_mean"):
             self.rb_percent_mean.configure(
@@ -2614,9 +3501,12 @@ class DashboardDataPlotter(tk.Tk):
         if plot_type in ("radar", "cartesian") and not self.angle_var.get().strip():
             return False
         if self.compare_var.get():
-            baseline_names = self.baseline_multi_displays or [self.baseline_display_var.get().strip()]
-            baseline_ids = [self.state.display_to_id.get(name, "") for name in baseline_names]
-            baseline_ids = [sid for sid in baseline_ids if sid in self.state.loaded]
+            baseline_names = self.baseline_multi_displays or [
+                self.baseline_display_var.get().strip()]
+            baseline_ids = [self.state.display_to_id.get(
+                name, "") for name in baseline_names]
+            baseline_ids = [
+                sid for sid in baseline_ids if sid in self.state.loaded]
             if not baseline_ids:
                 return False
         return True
@@ -2639,6 +3529,9 @@ class DashboardDataPlotter(tk.Tk):
     def _on_outlier_warnings_toggle(self):
         if self.outlier_warnings_var.get():
             return
+        if self._outlier_warnings_disable_notice_shown:
+            return
+        self._outlier_warnings_disable_notice_shown = True
         messagebox.showwarning(
             "Outlier warnings disabled",
             "You will no longer see warnings of outliers in the data metrics that you plot which may lead to visual artefacts. Consider applying the Outlier Removal method to improve the data plots.",
@@ -2855,6 +3748,7 @@ class DashboardDataPlotter(tk.Tk):
         baseline_id,
         outlier_threshold,
         color_map=None,
+        baseline_ids=None,
     ):
         if not self.show_outliers_var.get():
             return []
@@ -2879,15 +3773,25 @@ class DashboardDataPlotter(tk.Tk):
                 return []
 
             baseline_series = None
-            if compare and baseline_id in self.state.loaded:
-                base_vals = sanitize_numeric(
-                    self.state.loaded[baseline_id][metric_col], sentinels)
-                base_vals = apply_outlier_filter(
-                    base_vals, threshold=outlier_threshold, method=method)
-                base_vals = base_vals.to_numpy(dtype=float)
-                if value_mode == "percent_mean":
-                    base_vals = to_percent_of_mean(base_vals)
-                baseline_series = base_vals
+            resolved_baseline_ids = [
+                sid for sid in (baseline_ids or []) if sid in self.state.loaded
+            ]
+            if not resolved_baseline_ids and baseline_id in self.state.loaded:
+                resolved_baseline_ids = [baseline_id]
+            if compare and resolved_baseline_ids:
+                try:
+                    baseline_series = _aggregate_timeseries_baseline(
+                        self.state,
+                        resolved_baseline_ids,
+                        metric_col=metric_col,
+                        agg_mode=agg_mode,
+                        value_mode=value_mode,
+                        sentinels=sentinels,
+                        outlier_threshold=outlier_threshold,
+                        outlier_method=method,
+                    )
+                except Exception:
+                    baseline_series = None
 
             for sid in sids:
                 if compare and sid == baseline_id:
@@ -3013,22 +3917,22 @@ class DashboardDataPlotter(tk.Tk):
                 self.ax.scatter(
                     theta,
                     y,
-                    s=36,
+                    s=64,
                     marker="x",
                     color=color,
-                    alpha=0.7,
-                    linewidths=1.2,
+                    alpha=0.95,
+                    linewidths=2.0,
                     zorder=5,
                 )
             else:
                 self.ax.scatter(
                     x,
                     y,
-                    s=36,
+                    s=64,
                     marker="x",
                     color=color,
-                    alpha=0.7,
-                    linewidths=1.2,
+                    alpha=0.95,
+                    linewidths=2.0,
                     zorder=5,
                 )
 
@@ -3049,7 +3953,7 @@ class DashboardDataPlotter(tk.Tk):
                         theta=x,
                         mode="markers",
                         name=f"{item['label']} outliers",
-                        marker=dict(color=color, size=9, symbol="x"),
+                        marker=dict(color=color, size=12, symbol="x", line=dict(color=color, width=2)),
                         showlegend=False,
                     )
                 )
@@ -3060,7 +3964,7 @@ class DashboardDataPlotter(tk.Tk):
                         y=y,
                         mode="markers",
                         name=f"{item['label']} outliers",
-                        marker=dict(color=color, size=9, symbol="x"),
+                        marker=dict(color=color, size=12, symbol="x", line=dict(color=color, width=2)),
                         showlegend=False,
                     )
                 )
@@ -3157,7 +4061,8 @@ class DashboardDataPlotter(tk.Tk):
                     key_str = str(key)
                     mapped_sid = ""
                     if isinstance(source_id_map, dict):
-                        mapped_sid = str(source_id_map.get(key_str, "")).strip()
+                        mapped_sid = str(
+                            source_id_map.get(key_str, "")).strip()
                     if mapped_sid and mapped_sid in self.state.loaded:
                         restored_show[mapped_sid] = bool(flag)
                         continue
@@ -3166,7 +4071,8 @@ class DashboardDataPlotter(tk.Tk):
                         continue
                     # Backward compatibility for old saves that keyed by display name.
                     if isinstance(display_to_source_map, dict):
-                        mapped_sid = str(display_to_source_map.get(key_str, "")).strip()
+                        mapped_sid = str(
+                            display_to_source_map.get(key_str, "")).strip()
                         if mapped_sid and mapped_sid in self.state.loaded:
                             restored_show[mapped_sid] = bool(flag)
                 restored["show_flag"] = restored_show
@@ -3244,15 +4150,15 @@ class DashboardDataPlotter(tk.Tk):
             snap.get("outlier_threshold", self.outlier_thresh_var.get()))
         self.show_outliers_var.set(
             bool(snap.get("show_outliers", self.show_outliers_var.get())))
-        self.outlier_warnings_var.set(
-            bool(snap.get("outlier_warnings", self.outlier_warnings_var.get())))
         self._on_outlier_toggle()
         self.compare_var.set(bool(snap.get("compare", self.compare_var.get())))
         self.baseline_display_var.set(
             snap.get("baseline_display", self.baseline_display_var.get()))
-        raw_baselines = snap.get("baseline_displays", self.baseline_multi_displays)
+        raw_baselines = snap.get(
+            "baseline_displays", self.baseline_multi_displays)
         if isinstance(raw_baselines, list):
-            self.baseline_multi_displays = [str(name) for name in raw_baselines]
+            self.baseline_multi_displays = [
+                str(name) for name in raw_baselines]
         self.range_low_var.set(snap.get("range_low", self.range_low_var.get()))
         self.range_high_var.set(
             snap.get("range_high", self.range_high_var.get()))
@@ -3264,7 +4170,7 @@ class DashboardDataPlotter(tk.Tk):
         self._refresh_angle_choices()
         self.refresh_metric_choices()
 
-        self._on_plot_type_change()
+        self._on_plot_type_change(apply_default_agg=False)
         self._set_compare_controls_state()
         self.refresh_baseline_choices()
 
@@ -3321,13 +4227,7 @@ class DashboardDataPlotter(tk.Tk):
         if self._history_index < 0:
             self._redraw_empty()
             return
-        snap = self._history[self._history_index]
-        self._restoring_history = True
-        try:
-            self._apply_snapshot(snap)
-            self.plot()
-        finally:
-            self._restoring_history = False
+        self._redraw_empty()
 
     def _clear_history(self):
         if not self._history:
@@ -3729,13 +4629,15 @@ class DashboardDataPlotter(tk.Tk):
             self.metric_var.set(vals[0])
 
     def refresh_baseline_choices(self):
-        displays = [self.state.id_to_display.get(sid, sid) for sid in ordered_source_ids(self.state)]
+        displays = [self.state.id_to_display.get(
+            sid, sid) for sid in ordered_source_ids(self.state)]
         cur = self.baseline_display_var.get()
         if cur and cur not in self.state.display_to_id:
             self.baseline_display_var.set(displays[0] if displays else "")
         if not cur and displays:
             self.baseline_display_var.set(displays[0])
-        self.baseline_multi_displays = [name for name in self.baseline_multi_displays if name in displays]
+        self.baseline_multi_displays = [
+            name for name in self.baseline_multi_displays if name in displays]
         if not self.baseline_multi_displays and self.baseline_display_var.get() in displays:
             self.baseline_multi_displays = [self.baseline_display_var.get()]
         self._rebuild_baseline_menu(displays)
@@ -3751,11 +4653,11 @@ class DashboardDataPlotter(tk.Tk):
         if hasattr(self, "baseline_menu_var"):
             self.baseline_menu_var.set(self._baseline_menu_label())
 
-    def _toggle_baseline_popup(self, _event=None) -> None:
+    def _toggle_baseline_popup(self, _event=None):
         if self._baseline_popup is not None:
-            self._close_baseline_popup()
-            return
+            return "break"
         self._open_baseline_popup()
+        return "break"
 
     def _open_baseline_popup(self) -> None:
         if self._baseline_popup is not None:
@@ -3770,53 +4672,16 @@ class DashboardDataPlotter(tk.Tk):
         popup.overrideredirect(True)
         popup.transient(self)
         popup.configure(background="white")
-        popup.bind("<Escape>", lambda _e: self._close_baseline_popup(), add=True)
-        popup.bind("<FocusOut>", lambda _e: self._close_baseline_popup(), add=True)
+        popup.bind("<Escape>", lambda _e: self._close_baseline_popup(
+            apply_selection=False), add=True)
         self._baseline_popup = popup
 
-        container = tk.Frame(popup, background="white", borderwidth=1, relief="solid")
+        container = tk.Frame(popup, background="white",
+                             borderwidth=1, relief="solid")
         container.pack(fill="both", expand=True)
-        header = tk.Frame(container, background="#f0f0f0")
-        header.pack(fill="x")
-        title = tk.Label(
-            header,
-            text="Select baseline datasets",
-            background="#f0f0f0",
-            anchor="w",
-        )
-        title.pack(side="left", padx=8, pady=4, fill="x", expand=True)
-        close_btn = tk.Button(
-            header,
-            text="X",
-            command=self._close_baseline_popup,
-            background="#f0f0f0",
-            activebackground="#e0e0e0",
-            borderwidth=0,
-            padx=8,
-            pady=2,
-        )
-        close_btn.pack(side="right", padx=4, pady=2)
-
-        drag_state = {"x": 0, "y": 0, "win_x": 0, "win_y": 0}
-
-        def _start_drag(event):
-            drag_state["x"] = event.x_root
-            drag_state["y"] = event.y_root
-            drag_state["win_x"] = popup.winfo_x()
-            drag_state["win_y"] = popup.winfo_y()
-
-        def _on_drag(event):
-            dx = event.x_root - drag_state["x"]
-            dy = event.y_root - drag_state["y"]
-            popup.geometry(f"+{drag_state['win_x'] + dx}+{drag_state['win_y'] + dy}")
-
-        header.bind("<ButtonPress-1>", _start_drag, add=True)
-        header.bind("<B1-Motion>", _on_drag, add=True)
-        title.bind("<ButtonPress-1>", _start_drag, add=True)
-        title.bind("<B1-Motion>", _on_drag, add=True)
-
         canvas = tk.Canvas(container, background="white", highlightthickness=0)
-        scrollbar = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        scrollbar = tk.Scrollbar(
+            container, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -3846,7 +4711,8 @@ class DashboardDataPlotter(tk.Tk):
             cb.pack(fill="x", padx=8, pady=2)
 
         self._position_baseline_popup(popup)
-        popup.after_idle(lambda: self._reposition_baseline_popup_if_open(popup))
+        popup.after_idle(
+            lambda: self._reposition_baseline_popup_if_open(popup))
         popup.lift()
         try:
             popup.attributes("-topmost", True)
@@ -3859,7 +4725,8 @@ class DashboardDataPlotter(tk.Tk):
     def _position_baseline_popup(self, popup: tk.Toplevel) -> None:
         self.update_idletasks()
         popup.update_idletasks()
-        width = max(self.baseline_menu_btn.winfo_width(), popup.winfo_reqwidth())
+        width = max(self.baseline_menu_btn.winfo_width(),
+                    popup.winfo_reqwidth())
         height = min(popup.winfo_reqheight(), 260)
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
@@ -3894,7 +4761,15 @@ class DashboardDataPlotter(tk.Tk):
             return
         self._position_baseline_popup(popup)
 
-    def _close_baseline_popup(self) -> None:
+    def _close_baseline_popup(self, apply_selection: bool = True) -> None:
+        if self._baseline_menu_widget is not None:
+            try:
+                self._baseline_menu_widget.unpost()
+            except Exception:
+                pass
+        if apply_selection and self._baseline_popup is not None:
+            if not self._commit_baseline_menu_selection(show_message=True):
+                return
         if self._baseline_popup is None:
             return
         try:
@@ -3926,7 +4801,7 @@ class DashboardDataPlotter(tk.Tk):
             return
         if widget is self.baseline_menu_btn:
             return
-        self._close_baseline_popup()
+        self._close_baseline_popup(apply_selection=True)
 
     def _baseline_label_for_title(self, baseline_display: str) -> str:
         if len(self.baseline_multi_displays) > 1:
@@ -3974,21 +4849,31 @@ class DashboardDataPlotter(tk.Tk):
     def _rebuild_baseline_menu(self, displays: list[str]) -> None:
         self._baseline_menu_vars = {}
         self._baseline_menu_displays = list(displays)
-        if not displays:
-            self._update_baseline_menu_label()
-            self._close_baseline_popup()
-            return
+        menu = self._baseline_menu_widget
+        if menu is not None:
+            try:
+                menu.delete(0, "end")
+            except Exception:
+                pass
         for name in displays:
             var = tk.BooleanVar(value=name in self.baseline_multi_displays)
             self._baseline_menu_vars[name] = var
+            if menu is not None:
+                menu.add_checkbutton(
+                    label=name,
+                    variable=var,
+                    command=self._on_baseline_menu_toggle,
+                )
         self._update_baseline_menu_label()
-        if self._baseline_popup is not None:
-            self._close_baseline_popup()
-            self._open_baseline_popup()
+        self._close_baseline_popup(apply_selection=False)
 
     def _on_baseline_menu_toggle(self) -> None:
+        # Keep the popup open; commit happens on click-away.
+        return
+
+    def _commit_baseline_menu_selection(self, show_message: bool = True) -> bool:
         if not self._baseline_menu_displays:
-            return
+            return True
         prev = list(self.baseline_multi_displays)
         picked = [
             name
@@ -3996,22 +4881,31 @@ class DashboardDataPlotter(tk.Tk):
             if self._baseline_menu_vars.get(name) and self._baseline_menu_vars[name].get()
         ]
         if not picked:
-            messagebox.showinfo("Selection required", "Select at least one baseline dataset.")
+            if show_message:
+                messagebox.showinfo("Selection required",
+                                    "Select at least one baseline dataset.")
             picked = prev or self._baseline_menu_displays[:1]
             for name, var in self._baseline_menu_vars.items():
                 var.set(name in picked)
-        self.baseline_multi_displays = picked
+            if not picked:
+                return False
+            if show_message:
+                return False
+        self.baseline_multi_displays = list(picked)
         if picked:
             self.baseline_display_var.set(picked[0])
         self._update_baseline_menu_label()
         self._sync_state_settings_from_ui()
+        return True
 
     def _open_baseline_multi_select(self):
         if not self.compare_var.get():
             return
-        displays = [self.state.id_to_display.get(sid, sid) for sid in ordered_source_ids(self.state)]
+        displays = [self.state.id_to_display.get(
+            sid, sid) for sid in ordered_source_ids(self.state)]
         if not displays:
-            messagebox.showinfo("No datasets", "Load at least one dataset first.")
+            messagebox.showinfo(
+                "No datasets", "Load at least one dataset first.")
             return
 
         win = tk.Toplevel(self)
@@ -4019,7 +4913,8 @@ class DashboardDataPlotter(tk.Tk):
         win.transient(self)
         win.grab_set()
 
-        ttk.Label(win, text="Select one or more baseline datasets:").grid(row=0, column=0, sticky="w", padx=10, pady=(10, 6))
+        ttk.Label(win, text="Select one or more baseline datasets:").grid(
+            row=0, column=0, sticky="w", padx=10, pady=(10, 6))
         box = ttk.Frame(win)
         box.grid(row=1, column=0, sticky="nsew", padx=10)
 
@@ -4028,12 +4923,14 @@ class DashboardDataPlotter(tk.Tk):
         for idx, name in enumerate(displays):
             var = tk.BooleanVar(value=name in selected)
             vars_by_name[name] = var
-            ttk.Checkbutton(box, text=name, variable=var).grid(row=idx, column=0, sticky="w")
+            ttk.Checkbutton(box, text=name, variable=var).grid(
+                row=idx, column=0, sticky="w")
 
         def _apply_selection():
             picked = [name for name in displays if vars_by_name[name].get()]
             if not picked:
-                messagebox.showinfo("Selection required", "Select at least one baseline dataset.")
+                messagebox.showinfo("Selection required",
+                                    "Select at least one baseline dataset.")
                 return
             self.baseline_multi_displays = picked
             self.baseline_display_var.set(picked[0])
@@ -4042,12 +4939,14 @@ class DashboardDataPlotter(tk.Tk):
 
         btns = ttk.Frame(win)
         btns.grid(row=2, column=0, sticky="e", padx=10, pady=(8, 10))
-        ttk.Button(btns, text="Cancel", command=win.destroy).grid(row=0, column=0, padx=(0, 6))
-        ttk.Button(btns, text="Apply", command=_apply_selection).grid(row=0, column=1)
+        ttk.Button(btns, text="Cancel", command=win.destroy).grid(
+            row=0, column=0, padx=(0, 6))
+        ttk.Button(btns, text="Apply", command=_apply_selection).grid(
+            row=0, column=1)
 
     # ---------------- Project lifecycle ----------------
     def _reset_project_state(self):
-        self._close_baseline_popup()
+        self._close_baseline_popup(apply_selection=False)
         self._last_plotly_fig = None
         self._last_plotly_title = ""
         self.report_state = None
@@ -4071,7 +4970,7 @@ class DashboardDataPlotter(tk.Tk):
         self.range_fixed_var.set(False)
         self.use_original_binned_var.set(False)
         self.remove_outliers_var.set(False)
-        self.outlier_method_var.set("Impulse")
+        self.outlier_method_var.set("MAD")
         self.outlier_thresh_var.set("4.0")
         self.show_outliers_var.set(False)
         self.outlier_warnings_var.set(True)
@@ -4132,14 +5031,16 @@ class DashboardDataPlotter(tk.Tk):
             for name, df, source_id, display_override in datasets:
                 display = display_override or str(name)
                 original_source_id = str(source_id or "").strip()
-                source_id = self._unique_project_source_id(display, original_source_id)
+                source_id = self._unique_project_source_id(
+                    display, original_source_id)
                 self._register_dataset(
                     source_id=source_id, display=display, df=df)
                 if original_source_id:
                     source_id_map[original_source_id] = source_id
                 display_key = str(display).strip()
                 if display_key:
-                    display_candidates.setdefault(display_key, []).append(source_id)
+                    display_candidates.setdefault(
+                        display_key, []).append(source_id)
                 binned_df = binned_by_name.get(str(name))
                 if binned_df is not None:
                     self.state.binned[source_id] = binned_df
@@ -4170,7 +5071,8 @@ class DashboardDataPlotter(tk.Tk):
             if not self.project_title:
                 self.project_title = self._project_title_from_path(path)
             else:
-                self.project_title = self._normalize_project_title(self.project_title)
+                self.project_title = self._normalize_project_title(
+                    self.project_title)
             self.project_path = path
             self._clear_dirty()
             self.status.set(f"Loaded project: {os.path.basename(path)}")
@@ -4236,6 +5138,48 @@ class DashboardDataPlotter(tk.Tk):
             return True
         except Exception as e:
             log_exception("save_project failed")
+            messagebox.showerror(
+                "Save failed", f"{type(e).__name__}: {e}\n\nLog: {DEFAULT_LOG_PATH}")
+            return False
+
+    def save_data(self) -> bool:
+        visible_ids = [
+            sid for sid in ordered_source_ids(self.state)
+            if bool(self.state.show_flag.get(sid, True))
+        ]
+        if not visible_ids:
+            messagebox.showinfo(
+                "No visible datasets",
+                "No datasets are checked as Show.",
+            )
+            return False
+
+        if not self._ensure_project_title():
+            return False
+
+        initial_dir = os.path.dirname(
+            self.project_path) if self.project_path else ""
+        initial_name = f"{self._sanitize_filename(self.project_title)}.data.json"
+        out_path = filedialog.asksaveasfilename(
+            title="Save data",
+            defaultextension=".data.json",
+            initialdir=initial_dir or None,
+            initialfile=initial_name,
+            filetypes=[("Data (.data.json)", ("*.data.json",)),
+                       ("JSON", ("*.json",)),
+                       ("All files", ("*.*",))],
+        )
+        if not out_path:
+            return False
+        try:
+            payload = build_dataset_data_payload(self.state, visible_only=True)
+            with open(out_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2)
+            self.status.set(
+                f"Saved {len(visible_ids)} visible dataset(s) to: {out_path}")
+            return True
+        except Exception as e:
+            log_exception("save_data failed")
             messagebox.showerror(
                 "Save failed", f"{type(e).__name__}: {e}\n\nLog: {DEFAULT_LOG_PATH}")
             return False
@@ -4329,8 +5273,10 @@ class DashboardDataPlotter(tk.Tk):
         bar_colors = [color_map.get(self.state.display_to_id.get(
             label, ""), "#1f77b4") for label in data.labels]
         decimals = self._bar_label_decimals(data.values)
-        text_values = [self._format_bar_value(v, decimals) for v in data.values]
-        longest_label = max((len(str(label)) for label in data.labels), default=0)
+        text_values = [self._format_bar_value(
+            v, decimals) for v in data.values]
+        longest_label = max((len(str(label))
+                            for label in data.labels), default=0)
         tick_font_size = 9 if longest_label <= 15 else 8
         value_label_angle = -55 if len(data.labels) >= 15 else 0
         fig = go.Figure()
@@ -4425,6 +5371,7 @@ class DashboardDataPlotter(tk.Tk):
             baseline_id,
             outlier_threshold,
             color_map=color_map,
+            baseline_ids=baseline_ids,
         )
         self._add_outlier_markers_plotly(fig, "timeseries", outlier_points)
 
@@ -4451,7 +5398,8 @@ class DashboardDataPlotter(tk.Tk):
                 self._update_range_entries(*range_minmax)
 
         if data.compare and data.baseline_label:
-            baseline_legend_label = self._baseline_label_for_legend(data.baseline_label)
+            baseline_legend_label = self._baseline_label_for_legend(
+                data.baseline_label)
             fig.add_scatter(
                 x=[0, data.max_x], y=[0, 0], mode="lines", name=baseline_legend_label,
                 line=dict(color=baseline_color, width=1.6), showlegend=True)
@@ -4614,7 +5562,8 @@ class DashboardDataPlotter(tk.Tk):
 
         baseline_legend_label = ""
         if data.compare and data.baseline_label:
-            baseline_legend_label = self._baseline_label_for_legend(data.baseline_label)
+            baseline_legend_label = self._baseline_label_for_legend(
+                data.baseline_label)
         for trace in data.traces:
             color = color_map.get(trace.source_id, "#1f77b4")
             label = baseline_legend_label if trace.is_baseline and baseline_legend_label else trace.label
@@ -4717,8 +5666,10 @@ class DashboardDataPlotter(tk.Tk):
         compare = bool(self.compare_var.get())
         baseline_display = self.baseline_display_var.get().strip()
         baseline_names = self.baseline_multi_displays or [baseline_display]
-        baseline_ids = [self.state.display_to_id.get(name, "") for name in baseline_names]
-        baseline_ids = [sid for sid in baseline_ids if sid in self.state.loaded]
+        baseline_ids = [self.state.display_to_id.get(
+            name, "") for name in baseline_names]
+        baseline_ids = [
+            sid for sid in baseline_ids if sid in self.state.loaded]
         baseline_id = baseline_ids[0] if baseline_ids else ""
 
         if compare and not baseline_ids:
@@ -4924,8 +5875,10 @@ class DashboardDataPlotter(tk.Tk):
         compare = bool(self.compare_var.get())
         baseline_display = self.baseline_display_var.get().strip()
         baseline_names = self.baseline_multi_displays or [baseline_display]
-        baseline_ids = [self.state.display_to_id.get(name, "") for name in baseline_names]
-        baseline_ids = [sid for sid in baseline_ids if sid in self.state.loaded]
+        baseline_ids = [self.state.display_to_id.get(
+            name, "") for name in baseline_names]
+        baseline_ids = [
+            sid for sid in baseline_ids if sid in self.state.loaded]
         baseline_id = baseline_ids[0] if baseline_ids else ""
 
         if compare and not baseline_ids:
@@ -5059,8 +6012,10 @@ class DashboardDataPlotter(tk.Tk):
                 base_title = f"Time series {metric_col} ({mode_str})"
 
             if data.compare and data.baseline_label:
-                baseline_legend_label = self._baseline_label_for_legend(data.baseline_label)
-                b_label_title = self._baseline_label_for_title(data.baseline_label)
+                baseline_legend_label = self._baseline_label_for_legend(
+                    data.baseline_label)
+                b_label_title = self._baseline_label_for_title(
+                    data.baseline_label)
                 self.ax.plot([0, data.max_x], [0, 0], color=baseline_color,
                              linewidth=1.6, label=baseline_legend_label)
                 title = f"{base_title} difference to Baseline ({b_label_title})"
@@ -5080,7 +6035,8 @@ class DashboardDataPlotter(tk.Tk):
             self.ax.set_ylabel(y_title)
             self.ax.grid(True, linestyle=":")
             if plotted:
-                self.fig.subplots_adjust(left=0.08, right=0.78, top=0.9, bottom=0.1)
+                self.fig.subplots_adjust(
+                    left=0.08, right=0.78, top=0.9, bottom=0.1)
                 handles, labels = self.ax.get_legend_handles_labels()
                 self._apply_top_legend(handles, labels, font_size=9)
 
@@ -5098,6 +6054,7 @@ class DashboardDataPlotter(tk.Tk):
                 baseline_id,
                 outlier_threshold,
                 color_map=color_map,
+                baseline_ids=baseline_ids,
             )
             self._add_outlier_markers_matplotlib(plot_type, outlier_points)
             self.canvas.draw_idle()
@@ -5189,10 +6146,13 @@ class DashboardDataPlotter(tk.Tk):
                 self.ax.set_ylim(fixed_range[0], fixed_range[1])
 
             decimals = self._bar_label_decimals(data.values)
-            text_values = [self._format_bar_value(v, decimals) for v in data.values]
+            text_values = [self._format_bar_value(
+                v, decimals) for v in data.values]
             y_values = np.asarray(data.values, dtype=float)
-            y_span = float(np.nanmax(y_values) - np.nanmin(y_values)) if y_values.size else 0.0
-            y_max_abs = float(np.nanmax(np.abs(y_values))) if y_values.size else 0.0
+            y_span = float(np.nanmax(y_values) -
+                           np.nanmin(y_values)) if y_values.size else 0.0
+            y_max_abs = float(np.nanmax(np.abs(y_values))
+                              ) if y_values.size else 0.0
             y_offset = max(y_span * 0.02, y_max_abs * 0.015, 1e-6)
             value_label_rotation = 55 if len(data.labels) >= 15 else 0
             value_label_ha = "left" if value_label_rotation else "center"
@@ -5311,7 +6271,8 @@ class DashboardDataPlotter(tk.Tk):
                 b_label = data.baseline_label or self.state.id_to_display.get(
                     baseline_id, baseline_display)
                 b_label_title = self._baseline_label_for_title(b_label)
-                baseline_legend_label = self._baseline_label_for_legend(b_label)
+                baseline_legend_label = self._baseline_label_for_legend(
+                    b_label)
                 self._set_plot_title(
                     f"{data.agg_label} {metric_col} ({mode_str}) difference to Baseline ({b_label_title})"
                 )
@@ -5323,7 +6284,8 @@ class DashboardDataPlotter(tk.Tk):
                 self.ax.set_ylabel(metric_col)
 
             if plotted:
-                self.fig.subplots_adjust(left=0.08, right=0.78, top=0.9, bottom=0.1)
+                self.fig.subplots_adjust(
+                    left=0.08, right=0.78, top=0.9, bottom=0.1)
                 handles, labels = self.ax.get_legend_handles_labels()
                 if compare and baseline_label and baseline_handle and baseline_handle not in handles:
                     handles.append(baseline_handle)
@@ -5449,7 +6411,8 @@ class DashboardDataPlotter(tk.Tk):
                 baseline_legend_label if label == b_label else label
                 for label in labels
             ]
-            self.fig.subplots_adjust(left=0.06, right=0.76, top=0.92, bottom=0.08)
+            self.fig.subplots_adjust(
+                left=0.06, right=0.76, top=0.92, bottom=0.08)
             self._apply_top_legend(handles, labels, font_size=9)
             self.ax.set_position([0.06, 0.08, 0.68, 0.8])
             auto_range = None
@@ -5468,11 +6431,13 @@ class DashboardDataPlotter(tk.Tk):
                     self.ax.autoscale_view(scaley=True)
             low, high = self.ax.get_ylim()
             if fixed_range:
-                self._update_range_entries(low - data.offset, high - data.offset)
+                self._update_range_entries(
+                    low - data.offset, high - data.offset)
             elif auto_range:
                 self._update_range_entries(auto_range[0], auto_range[1])
             else:
-                self._update_range_entries(low - data.offset, high - data.offset)
+                self._update_range_entries(
+                    low - data.offset, high - data.offset)
             fmt_delta_ticks(self.ax, data.offset)
         else:
             self._set_plot_title(
@@ -5481,7 +6446,8 @@ class DashboardDataPlotter(tk.Tk):
                 y=1.08,
             )
             self.ax.grid(True)
-            self.fig.subplots_adjust(left=0.06, right=0.76, top=0.92, bottom=0.08)
+            self.fig.subplots_adjust(
+                left=0.06, right=0.76, top=0.92, bottom=0.08)
             self.ax.set_position([0.06, 0.08, 0.68, 0.8])
             if plotted:
                 handles, labels = self.ax.get_legend_handles_labels()

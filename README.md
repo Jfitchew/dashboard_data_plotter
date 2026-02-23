@@ -133,20 +133,25 @@ Dataset order in the **Data Sources panel defines plotting order everywhere**.
 
 ## Reports and snapshots
 
-The Tkinter app can capture **frozen snapshots** of plots (with annotations and comments) into a
-JSON report file. Snapshots are saved as static images (Matplotlib) or HTML (Plotly), so they do not
-change if datasets later change.
+The Tkinter app can capture **frozen snapshots** of plots (with annotations and comments) and add
+**text-only content blocks** into a JSON report file. Snapshots are saved as static images
+(Matplotlib) or HTML (Plotly), so they do not change if datasets later change.
 
 Report workflow:
 1. Plot a chart.
 2. (Optional) Click **Format…** to set annotation style defaults (font, bold/italic, colours, and caption offset from the selected point).
 3. (Optional) Toggle **Annotate** and click the plot to add text annotations using the current format.
 4. Click **Add snapshot...** to include the plot and comments in the report.
-5. Use **Export HTML...** or **Export PDF...** to share with clients.
+5. (Optional) Click **Add text block...** for narrative sections that are not tied to a plot. On Windows, this opens a rich content editor (WebView-based) where you can paste from Word/web pages using normal right-click **Paste** / `Ctrl+V`, review/edit rendered content (including images), and then save it back into the report as an HTML-rich block.
+6. Use **Manage content...** to edit/remove/reorder snapshots and text blocks.
+7. (Optional) Tick **Incl meta** to include metadata in preview/export (data sources, plot settings, dates, and auto plot titles). Leave it unticked to hide them.
+8. Use **Export HTML...** or **Export PDF...** to share with clients.
 
-Report files are stored as JSON (default extension `.rep.json`) and create a sibling `*_assets` folder with the snapshot files.
-PDF export uses the optional `weasyprint` dependency; if it is not installed, the app will prompt you.
-Snapshot comments accept basic Markdown (bold, italics, bullet lists).
+Report files are stored as JSON (default extension `.rep.json`) and create a sibling `*_assets` folder with the snapshot files. Reports are standalone and do not store project path/title references (new reports still default their report title from the current project title).
+PDF export uses the optional `reportlab` dependency and renders directly from the report JSON (no HTML-to-PDF conversion step); if it is not installed, the app will prompt you.
+Snapshot comments and plain-text blocks accept basic Markdown (bold, italics, bullet lists).
+HTML-rich text blocks render directly in HTML preview/export; PDF export uses a text fallback for complex HTML content (for example tables/images) and may warn.
+The Windows rich content editor requires the optional `pywebview` dependency.
 Annotation format defaults are stored with the report (`annotation_format`) and are also persisted in project settings so new reports created from that project can reuse the last chosen style.
 
 ---

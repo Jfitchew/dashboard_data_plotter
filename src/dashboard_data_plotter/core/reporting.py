@@ -22,6 +22,7 @@ def new_report_state(
     project_path: str,
     data_sources: list[dict[str, str]],
 ) -> dict[str, Any]:
+    del project_path  # Reports are standalone and do not persist project references.
     now = _now_iso()
     title = f"{project_title} Report" if project_title else "Untitled Report"
     return {
@@ -29,8 +30,7 @@ def new_report_state(
         "title": title,
         "created_at": now,
         "updated_at": now,
-        "project_title": project_title,
-        "project_path": project_path,
+        "include_meta": False,
         "data_sources": list(data_sources),
         "snapshots": [],
     }
@@ -42,11 +42,18 @@ def touch_report(report: dict[str, Any]) -> None:
 
 def save_report(report: dict[str, Any], path: str) -> None:
     touch_report(report)
+    payload = dict(report)
+    payload.pop("project_title", None)
+    payload.pop("project_path", None)
     with open(path, "w", encoding="utf-8") as handle:
-        json.dump(report, handle, indent=2)
+        json.dump(payload, handle, indent=2)
 
 
 def load_report(path: str) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as handle:
         obj = json.load(handle)
-    return obj if isinstance(obj, dict) else {}
+    if not isinstance(obj, dict):
+        return {}
+    obj.pop("project_title", None)
+    obj.pop("project_path", None)
+    return obj

@@ -1,6 +1,28 @@
 # Change Log
 
 3.29 - New Build Release
+  - 3.29.109 - 2026-02-23 - Fixed raw time-series outlier `X` overlays in comparison mode to use the selected baseline group average (not just the first baseline dataset), removing the vertical offset from the actual outlier points; also removed unused radar outlier offset overlay handling.
+  - 3.29.108 - 2026-02-23 - Restyled the comparison baseline multi-select back to a compact integrated dropdown checklist (no separate header/footer controls) and kept it open during multi-pick, applying the selection only when clicking away (with `Esc` cancel).
+  - 3.29.107 - 2026-02-23 - Changed default outlier method to `MAD`, made plot-type switches default Avg type to `mean` (bar), `median` (radar/cartesian), and `raw` (time series), improved outlier marker visibility, kept `Outlier warnings` unchanged during history navigation, warned only once when disabling outlier warnings, and made history delete clear to a blank plot without changing current plot settings.
+  - 3.29.106 - 2026-02-23 - Changed the comparison baseline multi-select dropdown to stay open while ticking multiple datasets and commit selections on `OK`/header close/click-away (with `Esc` canceling in-progress changes).
+  - 3.29.105 - 2026-02-23 - Replaced the comparison baseline multi-select popup with an integrated dropdown menu (`Menubutton`) using ticked items for multi-selection, reducing the separate picker feel while preserving baseline-group ordering/selection behavior.
+  - 3.29.104 - 2026-02-23 - Replaced the clunky Windows text-block add/edit flow with a WebView-based rich content editor (WordPad-like paste/edit UI with normal right-click paste/Ctrl+V for Word/web content including images), keeping the Tk text editor as fallback when `pywebview` is unavailable.
+  - 3.29.103 - 2026-02-23 - Added text-block clipboard helpers for pasting rich HTML/text and clipboard images (saved into report assets and inserted as `<img>` tags), improving Word/web copy-paste workflows in reports.
+  - 3.29.102 - 2026-02-23 - Added rich HTML support for report text blocks (including pasted web/doc HTML and `<img>` tags) with direct HTML preview/export rendering and PDF text fallback warnings for unsupported rich elements.
+  - 3.29.101 - 2026-02-23 - Added report text-only content blocks plus a `Manage content...` editor to edit/remove/reorder report snapshots and text blocks in Tkinter, with HTML/PDF export support.
+  - 3.29.100 - 2026-02-23 - Rebalanced report presentation in PDF/HTML exports: increased plot area sizing and reduced comment text size/weight for more proportional snapshot sections.
+  - 3.29.99 - 2026-02-23 - Reduced report HTML/preview snapshot plot area width and interactive frame height for a more compact layout.
+  - 3.29.98 - 2026-02-23 - Reduced direct PDF report snapshot image sizing to a more compact layout (about half-width) so more content fits per page.
+  - 3.29.97 - 2026-02-23 - Replaced report PDF export's HTML/WeasyPrint conversion path with direct JSON-to-PDF rendering via optional `reportlab`, keeping the existing Tkinter export flow unchanged.
+  - 3.29.96 - 2026-02-23 - Updated the New Report dialog prompt label from `Project title` to `Report title` while keeping the current project title as the default value.
+  - 3.29.95 - 2026-02-23 - Fixed hidden-meta report preview/export headings to show only explicit user snapshot titles (no fallback auto plot titles and no fallback `Snapshot` heading).
+  - 3.29.94 - 2026-02-23 - Fixed bar-chart comparison vs grouped baseline so shown datasets that are also in the baseline group plot their true delta vs the grouped baseline average instead of being forced to zero.
+  - 3.29.93 - 2026-02-23 - Fixed hidden-meta report snapshot headings to suppress default plot titles across all snapshots (including legacy saved `user_title` values equal to the plot title), and fixed bar comparison plots to respect `Show` for baseline-group datasets on the x-axis.
+  - 3.29.92 - 2026-02-23 - Corrected `Incl meta` report checkbox semantics so checked includes metadata and new reports default to metadata hidden; hidden-meta mode suppresses original plot titles in snapshot headings unless a user snapshot title is provided.
+  - 3.29.91 - 2026-02-23 - Made reports standalone by removing saved project references, renamed the report "Snapshots" section to "Analysis", and added an `Incl meta` toggle to hide report metadata in preview/export.
+  - 3.29.90 - 2026-02-23 - Fixed comparison plotting so datasets included in the selected baseline group can still be plotted (as deltas vs the combined baseline average) when they are checked as Show.
+  - 3.29.89 - 2026-02-23 - Moved the `Save Data` button into the Data sources toolbar, replacing the previous `Remove all` button position.
+  - 3.29.88 - 2026-02-23 - Added a `Save Data` button between Save project and Guide to export only datasets currently checked as Show to a `.data.json` multi-dataset file.
   - 3.29.87 - 2026-02-19 - Increased radar auto-range lower-bound buffer from 10% to 20% of span when Fixed range is off.
   - 3.29.86 - 2026-02-19 - Documented changelog numbering policy: use the next build number (`BUILD_VERSION + 1`) for release headers and keep entries top-first.
   - 3.29.85 - 2026-02-19 - Removed git-based changelog auto-generation; the app now reads and maintains a single manual `CHANGELOG.md` source.

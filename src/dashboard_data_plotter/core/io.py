@@ -140,7 +140,7 @@ def apply_project_settings(state: ProjectState, settings: dict[str, Any]) -> Non
         if "outlier_threshold" in cleaning:
             state.cleaning_settings.outlier_threshold = cleaning.get("outlier_threshold")
         if "outlier_method" in cleaning:
-            state.cleaning_settings.outlier_method = str(cleaning.get("outlier_method") or "impulse")
+            state.cleaning_settings.outlier_method = str(cleaning.get("outlier_method") or "mad")
 
     if isinstance(analysis, dict):
         if "stats_mode" in analysis:
@@ -174,9 +174,21 @@ def apply_project_settings(state: ProjectState, settings: dict[str, Any]) -> Non
 
 
 def build_project_payload(state: ProjectState) -> dict[str, Any]:
+    payload = build_dataset_data_payload(state)
+    payload[PROJECT_SETTINGS_KEY] = build_project_settings(state)
+    return payload
+
+
+def build_dataset_data_payload(
+    state: ProjectState,
+    *,
+    visible_only: bool = False,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     existing = set()
     for sid in ordered_source_ids(state):
+        if visible_only and not bool(state.show_flag.get(sid, True)):
+            continue
         display = state.id_to_display.get(sid, sid)
         name = make_unique_name(display, existing)
         existing.add(name)
@@ -186,7 +198,6 @@ def build_project_payload(state: ProjectState) -> dict[str, Any]:
             "__source_id__": sid,
             "__display__": display,
         }
-    payload[PROJECT_SETTINGS_KEY] = build_project_settings(state)
     return payload
 
 

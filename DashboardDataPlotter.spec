@@ -10,7 +10,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['PyQt6', 'PyQt5', 'PySide6', 'PySide2', 'qtpy', 'webview.platforms.qt', 'webview.platforms.gtk', 'webview.platforms.cocoa', 'webview.platforms.android', 'webview.platforms.cef'],
     noarchive=False,
     optimize=0,
 )

@@ -239,13 +239,16 @@ This will:
 
 ## Streamlit UI (optional)
 
-The Streamlit UI mirrors most plotting controls from the Tkinter app, including:
+The Streamlit UI mirrors the desktop app's left-panel flow and plotting controls:
+- Desktop-style left navigation with top-level tabs: **Project / Data**, **Plot**, **Reports**
+- Project/Data sub-sections for **Load**, **Clean**, and **Align** workflows
 - Plot type selection (Radar / Cartesian / Bar / Time series)
 - Close loop, outlier removal (MAD / Phase-MAD / Hampel / Impulse), fixed range
 - Baseline comparison
 - Optional background images/bands
 - Plot history (Prev / Next / Delete)
   - Only successful plot renders are added to history
+- Responsive visual theme with improved sidebar/plot styling for web use
 
 To run the Streamlit UI:
 

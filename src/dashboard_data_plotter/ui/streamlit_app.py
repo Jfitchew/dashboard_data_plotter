@@ -696,20 +696,95 @@ def _collect_columns() -> List[str]:
     return cols
 
 
+def _inject_web_theme() -> None:
+    st.markdown(
+        """
+        <style>
+        [data-testid="stAppViewContainer"] {
+            background: radial-gradient(circle at 20% 0%, #1f2937 0%, #111827 45%, #0b1220 100%);
+        }
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #0f172a 0%, #111827 100%);
+            border-right: 1px solid rgba(148, 163, 184, 0.22);
+        }
+        [data-testid="stSidebar"] .stMarkdown,
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] span {
+            color: #e5e7eb;
+        }
+        .dp-panel {
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 14px;
+            padding: 0.85rem 1rem;
+            margin-bottom: 0.8rem;
+            background: linear-gradient(180deg, rgba(30, 41, 59, 0.7), rgba(15, 23, 42, 0.9));
+        }
+        .dp-panel h3 {
+            margin: 0;
+            font-size: 1rem;
+            color: #f8fafc;
+        }
+        .dp-panel p {
+            margin: 0.35rem 0 0;
+            color: #cbd5e1;
+            font-size: 0.85rem;
+        }
+        .stPlotlyChart {
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 12px;
+            background: rgba(15, 23, 42, 0.45);
+            padding: 0.35rem;
+        }
+        @media (max-width: 1000px) {
+            .dp-panel {
+                padding: 0.7rem 0.8rem;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_sidebar_navigation() -> tuple[str, str]:
+    st.markdown(
+        """
+        <div class="dp-panel">
+          <h3>Workspace</h3>
+          <p>Match desktop flow: organize data, configure plots, then export reports.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    main_tab = st.radio(
+        "Desktop tabs",
+        ["Project / Data", "Plot", "Reports"],
+        key="main_tab",
+    )
+    project_step = "Load"
+    if main_tab == "Project / Data":
+        project_step = st.radio(
+            "Project / Data section",
+            ["Load", "Clean", "Align"],
+            horizontal=True,
+            key="project_data_step",
+        )
+    return main_tab, project_step
+
+
 def main() -> None:
     st.set_page_config(page_title="Dashboard Data Plotter (Streamlit)", layout="wide")
     _ensure_session_state()
+    _inject_web_theme()
 
     st.title("Dashboard Data Plotter")
-    st.caption("Streamlit UI using shared core state and plotting.")
+    st.caption("Web UI aligned with the Windows desktop workflow and shared plotting core.")
 
     with st.sidebar:
-        step = st.selectbox(
-            "Workflow",
-            ["Load", "Clean", "Align", "Plot", "Analysis", "Report"],
-        )
+        tab_name, project_step = _render_sidebar_navigation()
 
-        if step == "Load":
+        if tab_name == "Project / Data" and project_step == "Load":
             st.subheader("Load")
             uploaded = st.file_uploader(
                 "Upload JSON file(s)",
@@ -753,7 +828,7 @@ def main() -> None:
                 mime="application/json",
             )
 
-        elif step == "Clean":
+        elif tab_name == "Project / Data" and project_step == "Clean":
             st.subheader("Clean")
             st.info("Cleaning config is stored in project settings.")
             st.caption("TODO: Wire these controls to core/cleaning.py (CleaningSettings).")
@@ -762,24 +837,20 @@ def main() -> None:
             st.selectbox("Method", ["MAD", "Phase-MAD", "Hampel", "Impulse"], key="clean_outlier_method")
             st.text_input("Outlier threshold", value="4.0", key="clean_outlier_threshold")
 
-        elif step == "Align":
+        elif tab_name == "Project / Data" and project_step == "Align":
             st.subheader("Align")
             st.info("Alignment step placeholder (future work).")
 
-        elif step == "Plot":
+        elif tab_name == "Plot":
             st.subheader("Plot")
-        elif step == "Analysis":
-            st.subheader("Analysis")
-            st.info("Analysis step placeholder (future work).")
-            st.caption("TODO: Implement analysis workflows in core/analysis.py and bind UI controls here.")
-        elif step == "Report":
-            st.subheader("Report")
+        elif tab_name == "Reports":
+            st.subheader("Reports")
             st.info("Report step placeholder (future work).")
 
-    if step in ("Load", "Clean"):
+    if tab_name == "Project / Data" and project_step in ("Load", "Clean"):
         _render_dataset_controls()
 
-    if step == "Plot":
+    if tab_name == "Plot":
         _render_plot_controls()
 
 

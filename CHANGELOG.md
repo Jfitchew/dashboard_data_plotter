@@ -1,6 +1,7 @@
 # Change Log
 
 3.29 - New Build Release
+  - 3.29.133 - 2026-02-24 - Updated the Streamlit web UI to mirror the desktop left-tab structure with `Project / Data`, `Plot`, and `Reports` navigation, plus responsive visual styling upgrades for a richer sidebar/plot presentation.
   - 3.29.132 - 2026-02-24 - Restored a `Show` column in the Plot-tab dataset list (treeview) so plot visibility can be toggled directly there while the Project/Data list remains name/order focused.
   - 3.29.131 - 2026-02-24 - Hid the Data Sources `Show` column (visibility now controlled on the Plot tab list) and regrouped Plot controls into `Plot type`, `Metrics`, `Outliers`, `Range`, and `Mode` panels with layout/label refinements.
   - 3.29.130 - 2026-02-24 - Styled left-panel section group titles (`LabelFrame` captions) in bold while preserving the default caption size for clearer section scanning.

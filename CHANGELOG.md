@@ -1,6 +1,11 @@
 # Change Log
 
 3.29 - New Build Release
+  - 3.29.137 - 2026-02-24 - Fixed Windows rich editor custom paste clipboard reads on 64-bit Python by setting pointer-sized Win32 `ctypes` signatures (`GetClipboardData`/`GlobalLock`/`GlobalSize`), resolving access-violation failures seen in rich-editor diagnostics logs.
+  - 3.29.136 - 2026-02-24 - Added targeted rich-editor diagnostics logging (separate `DashboardDataPlotter_rich_editor.log`) for Windows WebView editor launch/exit, custom right-click paste events, and clipboard HTML/text/image detection to troubleshoot custom paste failures without enabling broad app logging.
+  - 3.29.135 - 2026-02-24 - Improved Windows rich content editor custom right-click `Paste` to preserve the editor insertion point and paste HTML/images/text via a Python clipboard bridge when WebView browser paste APIs are blocked (closer to `Ctrl+V` behavior).
+  - 3.29.134 - 2026-02-24 - Fixed Windows rich content editor custom right-click `Paste` menu action by adding a Python clipboard fallback for WebView environments where browser clipboard paste APIs are blocked (Ctrl+V rich paste remains supported).
+  - 3.29.133 - 2026-02-24 - Added right-click edit context menus (`Cut/Copy/Paste/Select All/Clear`) to Tk text/entry controls app-wide (including report snapshot comments and fallback report text editors) and added a custom right-click menu in the Windows WebView rich content editor title/content fields.
   - 3.29.132 - 2026-02-24 - Restored a `Show` column in the Plot-tab dataset list (treeview) so plot visibility can be toggled directly there while the Project/Data list remains name/order focused.
   - 3.29.131 - 2026-02-24 - Hid the Data Sources `Show` column (visibility now controlled on the Plot tab list) and regrouped Plot controls into `Plot type`, `Metrics`, `Outliers`, `Range`, and `Mode` panels with layout/label refinements.
   - 3.29.130 - 2026-02-24 - Styled left-panel section group titles (`LabelFrame` captions) in bold while preserving the default caption size for clearer section scanning.

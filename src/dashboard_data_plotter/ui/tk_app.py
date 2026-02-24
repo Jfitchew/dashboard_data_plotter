@@ -64,7 +64,12 @@ from dashboard_data_plotter.data.loaders import (
     wrap_angle_deg,
 )
 from dashboard_data_plotter.utils.sortkeys import dataset_sort_key
-from dashboard_data_plotter.utils.log import log_exception, DEFAULT_LOG_PATH
+from dashboard_data_plotter.utils.log import (
+    log_exception,
+    log_event,
+    DEFAULT_LOG_PATH,
+    RICH_EDITOR_LOG_PATH,
+)
 from dashboard_data_plotter.version import APP_TITLE, BUILD_VERSION, MAJOR_VERSION
 import os
 import sys
@@ -238,8 +243,11 @@ class DashboardDataPlotter(tk.Tk):
         self._plot_selected_marker = None
         self._plot_dataset_listbox_source_ids: list[str] = []
         self._suspend_plot_dataset_listbox_event = False
+        self._text_context_menu_target = None
+        self._text_context_menu = None
 
         self._init_styles()
+        self._init_text_context_menu_support()
         self._build_ui()
         self._build_plot()
         self._apply_startup_window_geometry()
@@ -663,6 +671,121 @@ class DashboardDataPlotter(tk.Tk):
         dialog.bind("<Escape>", lambda _e: dialog.destroy(), add=True)
         dialog.focus_set()
 
+    def _init_text_context_menu_support(self) -> None:
+        self._text_context_menu = tk.Menu(self, tearoff=0)
+        self._text_context_menu.add_command(
+            label="Cut", command=lambda: self._text_context_menu_action("cut"))
+        self._text_context_menu.add_command(
+            label="Copy", command=lambda: self._text_context_menu_action("copy"))
+        self._text_context_menu.add_command(
+            label="Paste", command=lambda: self._text_context_menu_action("paste"))
+        self._text_context_menu.add_separator()
+        self._text_context_menu.add_command(
+            label="Select All",
+            command=lambda: self._text_context_menu_action("select_all"),
+        )
+        self._text_context_menu.add_command(
+            label="Clear", command=lambda: self._text_context_menu_action("clear"))
+
+        for widget_class in ("Text", "Entry", "TEntry", "TCombobox"):
+            self.bind_class(
+                widget_class,
+                "<Button-3>",
+                self._show_text_context_menu,
+                add=True,
+            )
+
+    def _text_context_menu_state(self, widget) -> tuple[bool, bool]:
+        state = "normal"
+        try:
+            state = str(widget.cget("state"))
+        except Exception:
+            pass
+        editable = state not in {"disabled", "readonly"}
+        has_selection = False
+        try:
+            if isinstance(widget, tk.Text):
+                has_selection = bool(widget.tag_ranges("sel"))
+            else:
+                has_selection = bool(widget.selection_present())
+        except Exception:
+            has_selection = False
+        return editable, has_selection
+
+    def _show_text_context_menu(self, event):
+        widget = getattr(event, "widget", None)
+        if widget is None or self._text_context_menu is None:
+            return None
+        try:
+            widget.focus_set()
+        except Exception:
+            pass
+        self._text_context_menu_target = widget
+        editable, has_selection = self._text_context_menu_state(widget)
+        normal_or_disabled = "normal" if has_selection else "disabled"
+        self._text_context_menu.entryconfigure(
+            "Cut", state="normal" if (editable and has_selection) else "disabled")
+        self._text_context_menu.entryconfigure("Copy", state=normal_or_disabled)
+        self._text_context_menu.entryconfigure(
+            "Paste", state="normal" if editable else "disabled")
+        self._text_context_menu.entryconfigure("Select All", state="normal")
+        self._text_context_menu.entryconfigure(
+            "Clear", state="normal" if editable else "disabled")
+        try:
+            self._text_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._text_context_menu.grab_release()
+        return "break"
+
+    def _text_context_menu_action(self, action: str) -> None:
+        widget = self._text_context_menu_target
+        if widget is None:
+            return
+        try:
+            widget.focus_set()
+        except Exception:
+            pass
+
+        if action == "cut":
+            try:
+                widget.event_generate("<<Cut>>")
+            except Exception:
+                pass
+            return
+        if action == "copy":
+            try:
+                widget.event_generate("<<Copy>>")
+            except Exception:
+                pass
+            return
+        if action == "paste":
+            try:
+                widget.event_generate("<<Paste>>")
+            except Exception:
+                pass
+            return
+        if action == "select_all":
+            try:
+                if isinstance(widget, tk.Text):
+                    widget.tag_add("sel", "1.0", "end-1c")
+                    widget.mark_set("insert", "1.0")
+                    widget.see("insert")
+                else:
+                    widget.selection_range(0, "end")
+                    widget.icursor(0)
+                    widget.xview_moveto(0)
+            except Exception:
+                pass
+            return
+        if action == "clear":
+            try:
+                if isinstance(widget, tk.Text):
+                    widget.delete("1.0", "end")
+                else:
+                    widget.delete(0, "end")
+            except Exception:
+                pass
+
     # ---------------- UI ----------------
     def _build_ui(self):
         self.columnconfigure(0, weight=0)
@@ -819,21 +942,6 @@ class DashboardDataPlotter(tk.Tk):
             paste_frame, orient="vertical", command=self.paste_text.yview)
         paste_scroll.grid(row=0, column=1, sticky="ns")
         self.paste_text.configure(yscrollcommand=paste_scroll.set)
-
-        # Right-click context menu for the paste box
-        self._paste_menu = tk.Menu(self, tearoff=0)
-        self._paste_menu.add_command(
-            label="Cut", command=lambda: self.paste_text.event_generate("<<Cut>>"))
-        self._paste_menu.add_command(
-            label="Copy", command=lambda: self.paste_text.event_generate("<<Copy>>"))
-        self._paste_menu.add_command(
-            label="Paste", command=lambda: self.paste_text.event_generate("<<Paste>>"))
-        self._paste_menu.add_separator()
-        self._paste_menu.add_command(
-            label="Select All", command=lambda: self._select_all_in_paste())
-        self._paste_menu.add_command(label="Clear", command=self.clear_paste)
-
-        self.paste_text.bind("<Button-3>", self._show_paste_menu, add=True)
 
         ttk.Label(plot_tab, text="Plot", font=(
             "Segoe UI", 12, "bold")).grid(row=0, column=0, sticky="w")
@@ -2980,6 +3088,11 @@ class DashboardDataPlotter(tk.Tk):
         in_path = os.path.join(temp_dir, "input.json")
         out_path = os.path.join(temp_dir, "output.json")
         try:
+            log_event(
+                "tk.rich_editor.launch",
+                f"title_len={len(str(payload.get('title', '') or ''))} html_len={len(str(payload.get('html', '') or ''))}",
+                RICH_EDITOR_LOG_PATH,
+            )
             with open(in_path, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle, ensure_ascii=False)
 
@@ -3011,8 +3124,15 @@ class DashboardDataPlotter(tk.Tk):
                 capture_output=True,
                 text=True,
             )
+            log_event(
+                "tk.rich_editor.exit",
+                f"returncode={proc.returncode} stdout_len={len(proc.stdout or '')} stderr_len={len(proc.stderr or '')}",
+                RICH_EDITOR_LOG_PATH,
+            )
             if proc.returncode != 0:
                 stderr = (proc.stderr or "").strip()
+                if stderr:
+                    log_event("tk.rich_editor.stderr", stderr, RICH_EDITOR_LOG_PATH)
                 if "No module named 'webview'" in stderr or "No module named webview" in stderr:
                     messagebox.showinfo(
                         "Rich editor unavailable",
@@ -3028,15 +3148,22 @@ class DashboardDataPlotter(tk.Tk):
                 )
                 return None
             if not os.path.isfile(out_path):
+                log_event("tk.rich_editor.output", "missing_output_json", RICH_EDITOR_LOG_PATH)
                 return None
             with open(out_path, "r", encoding="utf-8") as handle:
                 result = json.load(handle)
+            log_event(
+                "tk.rich_editor.output",
+                f"ok={bool(isinstance(result, dict) and result.get('ok'))}",
+                RICH_EDITOR_LOG_PATH,
+            )
             if not isinstance(result, dict):
                 return {"cancelled": True}
             if result.get("ok"):
                 return result
             return {"cancelled": True}
         except Exception as exc:
+            log_exception("tk._run_windows_rich_html_editor failed", RICH_EDITOR_LOG_PATH)
             messagebox.showerror(
                 "Rich editor", f"Failed to open rich editor:\n{exc}")
             return None
@@ -5108,17 +5235,6 @@ class DashboardDataPlotter(tk.Tk):
             self.refresh_baseline_choices()
             self._auto_default_metric()
             self._mark_dirty()
-
-    def _show_paste_menu(self, event):
-        try:
-            self._paste_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self._paste_menu.grab_release()
-
-    def _select_all_in_paste(self):
-        self.paste_text.tag_add("sel", "1.0", "end-1c")
-        self.paste_text.mark_set("insert", "1.0")
-        self.paste_text.see("insert")
 
     def clear_paste(self):
         self.paste_text.delete("1.0", "end")

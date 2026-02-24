@@ -1,6 +1,7 @@
 # Change Log
 
 3.29 - New Build Release
+  - 3.29.110 - 2026-02-24 - Fixed packaged EXE rich report text editor launch so `Add text block...` opens the editor directly instead of first spawning a second main app instance.
   - 3.29.109 - 2026-02-23 - Fixed raw time-series outlier `X` overlays in comparison mode to use the selected baseline group average (not just the first baseline dataset), removing the vertical offset from the actual outlier points; also removed unused radar outlier offset overlay handling.
   - 3.29.108 - 2026-02-23 - Restyled the comparison baseline multi-select back to a compact integrated dropdown checklist (no separate header/footer controls) and kept it open during multi-pick, applying the selection only when clicking away (with `Esc` cancel).
   - 3.29.107 - 2026-02-23 - Changed default outlier method to `MAD`, made plot-type switches default Avg type to `mean` (bar), `median` (radar/cartesian), and `raw` (time series), improved outlier marker visibility, kept `Outlier warnings` unchanged during history navigation, warned only once when disabling outlier warnings, and made history delete clear to a blank plot without changing current plot settings.

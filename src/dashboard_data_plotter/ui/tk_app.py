@@ -2341,15 +2341,25 @@ class DashboardDataPlotter(tk.Tk):
                 json.dump(payload, handle, ensure_ascii=False)
 
             env = dict(os.environ)
-            py_path = env.get("PYTHONPATH", "")
-            env["PYTHONPATH"] = src_root + (os.pathsep + py_path if py_path else "")
-            cmd = [
-                sys.executable,
-                "-m",
-                "dashboard_data_plotter.ui.rich_html_editor",
-                in_path,
-                out_path,
-            ]
+            if getattr(sys, "frozen", False):
+                # In PyInstaller builds, `sys.executable -m ...` relaunches the main app.
+                # Route through the app entrypoint with a hidden dispatch flag instead.
+                cmd = [
+                    sys.executable,
+                    "--ddp-rich-html-editor",
+                    in_path,
+                    out_path,
+                ]
+            else:
+                py_path = env.get("PYTHONPATH", "")
+                env["PYTHONPATH"] = src_root + (os.pathsep + py_path if py_path else "")
+                cmd = [
+                    sys.executable,
+                    "-m",
+                    "dashboard_data_plotter.ui.rich_html_editor",
+                    in_path,
+                    out_path,
+                ]
             proc = subprocess.run(
                 cmd,
                 cwd=os.path.abspath(os.path.join(src_root, "..")),

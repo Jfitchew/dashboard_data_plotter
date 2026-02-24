@@ -1,4 +1,4 @@
-﻿# Dashboard Data Plotter - Workflow Guide
+﻿## Dashboard Data Plotter - Workflow Guide
 
 This guide focuses on the core workflow: projects, datasets, plot settings, plot history, and reports/content.
 

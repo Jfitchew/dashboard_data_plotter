@@ -1,6 +1,15 @@
 # Change Log
 
 3.29 - New Build Release
+  - 3.29.132 - 2026-02-24 - Restored a `Show` column in the Plot-tab dataset list (treeview) so plot visibility can be toggled directly there while the Project/Data list remains name/order focused.
+  - 3.29.131 - 2026-02-24 - Hid the Data Sources `Show` column (visibility now controlled on the Plot tab list) and regrouped Plot controls into `Plot type`, `Metrics`, `Outliers`, `Range`, and `Mode` panels with layout/label refinements.
+  - 3.29.130 - 2026-02-24 - Styled left-panel section group titles (`LabelFrame` captions) in bold while preserving the default caption size for clearer section scanning.
+  - 3.29.129 - 2026-02-24 - Moved `Paste data source` action buttons below the pasted JSON text box for a cleaner input-first layout.
+  - 3.29.128 - 2026-02-24 - Refined `Project / Data` and `Plot` tabs with title/subtitle rows and grouped sections (`LabelFrame`s) to match the clearer `Reports` tab layout style.
+  - 3.29.127 - 2026-02-24 - Refined the `Reports` tab layout with a separate title row and grouped sections (`Report file`, `Content and annotations`, `Preview and export`) for clearer spacing and readability.
+  - 3.29.126 - 2026-02-24 - Split left controls into `Project / Data`, `Plot`, and `Reports` tabs, and added a Plot-tab multi-select dataset visibility list (selection = shown in plots).
+  - 3.29.125 - 2026-02-24 - Moved `Guide` and `Change log` buttons to a right-aligned toolbar above the left notebook tabs for cleaner Project/Plot controls.
+  - 3.29.124 - 2026-02-24 - Improved left-panel notebook tab styling with bolder titles and stronger selected/inactive contrast for the `Project / Plot` and `Reports` tabs.
   - 3.29.123 - 2026-02-24 - Split the left control column into `Project / Plot` and `Reports` notebook tabs so report controls are separated from dataset/plot workflows.
   - 3.29.122 - 2026-02-24 - Added a Matplotlib in-panel data probe prototype: hover tooltips for plotted points/bars and click-to-highlight point selection (when annotation mode is off).
   - 3.29.121 - 2026-02-24 - Updated `AGENTS.md` to instruct Codex to include 1-2 concise mission-aligned or cycling-analytics best-practice follow-on improvement suggestions in coding-task final responses.

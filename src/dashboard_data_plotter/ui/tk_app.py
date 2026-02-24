@@ -236,6 +236,8 @@ class DashboardDataPlotter(tk.Tk):
         self._plot_hover_targets = []
         self._plot_hover_annotation = None
         self._plot_selected_marker = None
+        self._plot_dataset_listbox_source_ids: list[str] = []
+        self._suspend_plot_dataset_listbox_event = False
 
         self._init_styles()
         self._build_ui()
@@ -275,6 +277,42 @@ class DashboardDataPlotter(tk.Tk):
             style.configure("OutlierRow.TLabel", background=salmon)
             style.configure("OutlierRow.TCheckbutton", background=salmon)
             style.configure("Baseline.TMenubutton", background="white")
+            try:
+                default_font = tkfont.nametofont("TkDefaultFont")
+                section_label_font = (
+                    default_font.actual("family"),
+                    default_font.actual("size"),
+                    "bold",
+                )
+            except Exception:
+                section_label_font = ("Segoe UI", 9, "bold")
+            style.configure("Section.TLabelframe.Label",
+                            font=section_label_font)
+            style.configure(
+                "LeftPanel.TNotebook",
+                background="#d8dde6",
+                tabmargins=(2, 2, 2, 0),
+            )
+            style.configure(
+                "LeftPanel.TNotebook.Tab",
+                font=("Segoe UI", 10, "bold"),
+                padding=(14, 7),
+                background="#dce2eb",
+                foreground="#1f2937",
+            )
+            style.map(
+                "LeftPanel.TNotebook.Tab",
+                background=[
+                    ("selected", "#ffffff"),
+                    ("active", "#eaf0f8"),
+                    ("!selected", "#dce2eb"),
+                ],
+                foreground=[
+                    ("selected", "#111111"),
+                    ("active", "#111111"),
+                    ("!selected", "#334155"),
+                ],
+            )
         except Exception:
             pass
 
@@ -635,20 +673,45 @@ class DashboardDataPlotter(tk.Tk):
         left = ttk.Frame(self, padding=10)
         left.grid(row=0, column=0, sticky="ns")
         left.columnconfigure(0, weight=1)
-        left.rowconfigure(0, weight=1)
+        left.rowconfigure(1, weight=1)
 
-        left_notebook = ttk.Notebook(left)
-        left_notebook.grid(row=0, column=0, sticky="nsew")
+        tabs_tools = ttk.Frame(left)
+        tabs_tools.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        tabs_tools.columnconfigure(0, weight=1)
+        self.btn_guide = ttk.Button(
+            tabs_tools, text="Guide", command=self._open_guide, width=10)
+        self.btn_guide.grid(row=0, column=1, sticky="e")
+        self.btn_change_log = ttk.Button(
+            tabs_tools, text="Change log", command=self._open_changelog, width=12)
+        self.btn_change_log.grid(row=0, column=2, sticky="e", padx=(6, 0))
 
-        project_plot_tab = ttk.Frame(left_notebook, padding=8)
+        left_notebook = ttk.Notebook(left, style="LeftPanel.TNotebook")
+        left_notebook.grid(row=1, column=0, sticky="nsew")
+
+        project_data_tab = ttk.Frame(left_notebook, padding=8)
+        plot_tab = ttk.Frame(left_notebook, padding=8)
         report_tab = ttk.Frame(left_notebook, padding=8)
-        project_plot_tab.columnconfigure(0, weight=1)
+        project_data_tab.columnconfigure(0, weight=1)
+        plot_tab.columnconfigure(0, weight=1)
         report_tab.columnconfigure(0, weight=1)
-        left_notebook.add(project_plot_tab, text="Project / Plot")
+        left_notebook.add(project_data_tab, text="Project / Data")
+        left_notebook.add(plot_tab, text="Plot")
         left_notebook.add(report_tab, text="Reports")
 
-        proj_btns = ttk.Frame(project_plot_tab)
-        proj_btns.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        ttk.Label(project_data_tab, text="Project / Data", font=(
+            "Segoe UI", 12, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            project_data_tab,
+            text="Load, organize, rename, and order datasets. This tab controls project structure and saved dataset order.",
+            foreground="#555",
+            wraplength=380,
+        ).grid(row=1, column=0, sticky="w", pady=(2, 8))
+
+        project_file_group = ttk.LabelFrame(
+            project_data_tab, text="Project file", padding=8, style="Section.TLabelframe")
+        project_file_group.grid(row=2, column=0, sticky="ew")
+        proj_btns = ttk.Frame(project_file_group)
+        proj_btns.grid(row=0, column=0, sticky="ew")
         self.btn_new_project = ttk.Button(
             proj_btns, text="New project", command=self.new_project, width=12)
         self.btn_new_project.grid(row=0, column=0, sticky="ew")
@@ -658,44 +721,43 @@ class DashboardDataPlotter(tk.Tk):
         self.btn_save_project = ttk.Button(
             proj_btns, text="Save project...", command=self.save_project, width=12)
         self.btn_save_project.grid(row=0, column=2, padx=(6, 0))
-        self.btn_guide = ttk.Button(
-            proj_btns, text="Guide", command=self._open_guide, width=10)
-        self.btn_guide.grid(row=0, column=3, sticky="e", padx=(30, 0))
-        self.btn_change_log = ttk.Button(
-            proj_btns, text="Change log", command=self._open_changelog, width=12)
-        self.btn_change_log.grid(row=0, column=4, sticky="e", padx=(0, 0))
 
-        data_btns = ttk.Frame(project_plot_tab)
-        data_btns.grid(row=2, column=0, sticky="ew", pady=(0, 0))
-        ttk.Label(data_btns, text="Data sources", font=(
-            "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+        data_group = ttk.LabelFrame(
+            project_data_tab, text="Data sources", padding=8, style="Section.TLabelframe")
+        data_group.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        data_group.columnconfigure(0, weight=1)
+
+        data_btns = ttk.Frame(data_group)
+        data_btns.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         self.btn_add_files = ttk.Button(
             data_btns, text="Add data file(s)...", command=self.add_files)
-        self.btn_add_files.grid(row=0, column=1, padx=(16, 0))
+        self.btn_add_files.grid(row=0, column=0, padx=(0, 0))
         self.btn_remove = ttk.Button(
             data_btns, text="Remove", command=self.remove_selected, width=8)
-        self.btn_remove.grid(row=0, column=2, padx=(6, 0), pady=(0, 0))
+        self.btn_remove.grid(row=0, column=1, padx=(6, 0), pady=(0, 0))
         self.btn_save_data = ttk.Button(
             data_btns, text="Save Data", command=self.save_data, width=11)
-        self.btn_save_data.grid(row=0, column=3, padx=(3, 0), pady=(0, 0))
+        self.btn_save_data.grid(row=0, column=2, padx=(3, 0), pady=(0, 0))
         self.btn_rename = ttk.Button(
             data_btns, text="Rename", command=self.rename_selected, width=8)
-        self.btn_rename.grid(row=0, column=4, padx=(6, 0), pady=(0, 0))
+        self.btn_rename.grid(row=0, column=3, padx=(6, 0), pady=(0, 0))
         self.btn_move_up = ttk.Button(
             data_btns, text="Up", command=self.move_selected_up, width=3)
-        self.btn_move_up.grid(row=0, column=5, padx=(6, 0), pady=(0, 0))
+        self.btn_move_up.grid(row=0, column=4, padx=(6, 0), pady=(0, 0))
         self.btn_move_down = ttk.Button(
             data_btns, text="Dn", command=self.move_selected_down, width=3)
-        self.btn_move_down.grid(row=0, column=6, padx=(3, 0), pady=(0, 0))
+        self.btn_move_down.grid(row=0, column=5, padx=(3, 0), pady=(0, 0))
 
-        # Treeview: show checkbox + dataset name
-        tv_frame = ttk.Frame(project_plot_tab)
-        tv_frame.grid(row=3, column=0, sticky="ew")
+        # Treeview: dataset list (show/hide state is still tracked in state, but
+        # visibility control is handled from the Plot tab list for now).
+        tv_frame = ttk.Frame(data_group)
+        tv_frame.grid(row=1, column=0, sticky="ew")
         tv_frame.columnconfigure(0, weight=1)
 
         self.files_tree = ttk.Treeview(
             tv_frame,
             columns=("show", "name"),
+            displaycolumns=("name",),
             show="headings",
             height=8,
             selectmode="extended",
@@ -706,7 +768,7 @@ class DashboardDataPlotter(tk.Tk):
                                 command=self.sort_by_dataset_name)
         self.files_tree.column(
             "show", width=50, anchor="center", stretch=False)
-        self.files_tree.column("name", width=340, anchor="w")
+        self.files_tree.column("name", width=392, anchor="w")
 
         self.files_tree.grid(row=0, column=0, sticky="ew")
 
@@ -715,20 +777,28 @@ class DashboardDataPlotter(tk.Tk):
         tv_scroll.grid(row=0, column=1, sticky="ns")
         self.files_tree.configure(yscrollcommand=tv_scroll.set)
 
-        # Toggle show when clicking the Show column; rename on double-click of name
+        # Rename on double-click of name. Show/hide is handled on the Plot tab.
         self.files_tree.bind("<Button-1>", self._on_tree_click, add=True)
         self.files_tree.bind(
             "<Double-1>", self._on_tree_double_click, add=True)
 
         # --- Paste JSON sources
-        paste_header = ttk.Frame(project_plot_tab)
-        paste_header.grid(row=4, column=0, sticky="w", pady=(0, 5))
-        ttk.Label(paste_header, text="Paste data source", font=(
-            "Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=(0, 0))
+        paste_group = ttk.LabelFrame(
+            project_data_tab, text="Paste data source", padding=8, style="Section.TLabelframe")
+        paste_group.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        paste_group.columnconfigure(0, weight=1)
 
-        paste_btns = ttk.Frame(project_plot_tab)
-        paste_btns.grid(row=4, column=0, sticky="e",
-                        padx=(0, 30), pady=(10, 0))
+        paste_header = ttk.Frame(paste_group)
+        paste_header.grid(row=0, column=0, sticky="w", pady=(0, 5))
+        ttk.Label(
+            paste_header,
+            text="Paste a JSON dataset object or multi-dataset JSON, then load/save/clear from here.",
+            foreground="#555",
+            wraplength=300,
+        ).grid(row=0, column=0, sticky="w", padx=(0, 0))
+
+        paste_btns = ttk.Frame(paste_group)
+        paste_btns.grid(row=2, column=0, sticky="e", pady=(6, 0))
         self.btn_load_paste = ttk.Button(
             paste_btns, text="Load pasted data", command=self.load_from_paste)
         self.btn_load_paste.grid(row=0, column=0, sticky="ew")
@@ -739,8 +809,8 @@ class DashboardDataPlotter(tk.Tk):
             paste_btns, text="Clear pasted data", command=self.clear_paste)
         self.btn_clear_paste.grid(row=0, column=2, padx=(6, 0))
 
-        paste_frame = ttk.Frame(project_plot_tab)
-        paste_frame.grid(row=5, column=0, sticky="ew")
+        paste_frame = ttk.Frame(paste_group)
+        paste_frame.grid(row=1, column=0, sticky="ew")
 
         self.paste_text = tk.Text(paste_frame, height=6, width=60, wrap="none")
         self.paste_text.grid(row=0, column=0, sticky="ew")
@@ -765,28 +835,64 @@ class DashboardDataPlotter(tk.Tk):
 
         self.paste_text.bind("<Button-3>", self._show_paste_menu, add=True)
 
-        ttk.Separator(project_plot_tab).grid(row=7, column=0, sticky="ew", pady=10)
+        ttk.Label(plot_tab, text="Plot", font=(
+            "Segoe UI", 12, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            plot_tab,
+            text="Choose datasets, then configure plot type, metrics and mode settings.",
+            foreground="#555",
+            wraplength=380,
+        ).grid(row=1, column=0, sticky="w", pady=(2, 8))
 
-        ttk.Label(project_plot_tab, text="Plot settings", font=(
-            "Segoe UI", 11, "bold")).grid(row=8, column=0, sticky="w")
+        # Plot tab dataset visibility selector (selection = shown in plots)
+        plot_select_group = ttk.LabelFrame(
+            plot_tab, text="Datasets to plot", padding=8, style="Section.TLabelframe")
+        plot_select_group.grid(row=2, column=0, sticky="ew")
+        plot_select_group.columnconfigure(0, weight=1)
 
-        self.outlier_warnings_chk = ttk.Checkbutton(
-            project_plot_tab,
-            text="Outlier warnings?",
-            variable=self.outlier_warnings_var,
-            command=self._on_outlier_warnings_toggle,
+        plot_ds_header = ttk.Frame(plot_select_group)
+        plot_ds_header.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        ttk.Label(
+            plot_ds_header,
+            text="Selection controls plot visibility (manage names/order in Project / Data)",
+            foreground="#555",
+        ).grid(row=0, column=0, sticky="w")
+
+        plot_ds_frame = ttk.Frame(plot_select_group)
+        plot_ds_frame.grid(row=2, column=0, sticky="ew")
+        plot_ds_frame.columnconfigure(0, weight=1)
+        self.plot_datasets_tree = ttk.Treeview(
+            plot_ds_frame,
+            columns=("show", "name"),
+            show="headings",
+            height=7,
+            selectmode="extended",
         )
-        self.outlier_warnings_chk.grid(
-            row=8, column=0, sticky="e", padx=(180, 0))
+        self.plot_datasets_tree.heading(
+            "show", text="Show", command=self.toggle_all_show)
+        self.plot_datasets_tree.heading("name", text="Dataset")
+        self.plot_datasets_tree.column(
+            "show", width=50, anchor="center", stretch=False)
+        self.plot_datasets_tree.column("name", width=330, anchor="w")
+        self.plot_datasets_tree.grid(row=0, column=0, sticky="ew")
+        plot_ds_scroll = ttk.Scrollbar(
+            plot_ds_frame, orient="vertical", command=self.plot_datasets_tree.yview)
+        plot_ds_scroll.grid(row=0, column=1, sticky="ns")
+        self.plot_datasets_tree.configure(yscrollcommand=plot_ds_scroll.set)
+        self.plot_datasets_tree.bind(
+            "<Button-1>", self._on_plot_datasets_tree_click, add=True)
 
-        angle_frame = ttk.Frame(project_plot_tab)
-        angle_frame.grid(row=9, column=0, sticky="ew", pady=(6, 2))
+        plot_type_group = ttk.LabelFrame(
+            plot_tab, text="Plot type", padding=8, style="Section.TLabelframe")
+        plot_type_group.grid(row=3, column=0, sticky="ew")
+        plot_type_group.columnconfigure(0, weight=1)
+
+        plot_type_frame = ttk.Frame(plot_type_group)
+        plot_type_frame.grid(row=0, column=0, sticky="ew")
 
         # Plot type (radar/cartesian/bar)
-        ttk.Label(angle_frame, text="Plot type:").grid(
-            row=0, column=0, sticky="w")
-        pt = ttk.Frame(angle_frame)
-        pt.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        pt = ttk.Frame(plot_type_frame)
+        pt.grid(row=0, column=0, sticky="w", padx=(8, 0))
         self.rb_radar = ttk.Radiobutton(
             pt, text="Radar (polar)", variable=self.plot_type_var, value="radar",
             command=self._on_plot_type_change)
@@ -797,7 +903,7 @@ class DashboardDataPlotter(tk.Tk):
         self.rb_cartesian.grid(row=0, column=1, sticky="w", padx=(8, 0))
         self.chk_plotly = ttk.Checkbutton(
             pt, text="Interactive (Plotly)", variable=self.use_plotly_var)
-        self.chk_plotly.grid(row=0, column=2, sticky="w", padx=(20, 0))
+        self.chk_plotly.grid(row=0, column=3, sticky="w", padx=(150, 0))
 
         self.rb_bar = ttk.Radiobutton(
             pt, text="Bar (avg)", variable=self.plot_type_var, value="bar",
@@ -814,42 +920,52 @@ class DashboardDataPlotter(tk.Tk):
             variable=self.radar_background_var,
         )
         self.radar_background_chk.grid(
-            row=1, column=2, sticky="w", padx=(20, 0))
+            row=1, column=3, sticky="w", padx=(150, 0))
 
-        ttk.Label(angle_frame, text="Angle column:").grid(
-            row=1, column=0, sticky="w")
+        metrics_group = ttk.LabelFrame(
+            plot_tab, text="Metrics", padding=8, style="Section.TLabelframe")
+        metrics_group.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        metrics_group.columnconfigure(0, weight=1)
+
+        metric_frame = ttk.Frame(metrics_group)
+        metric_frame.grid(row=0, column=0, sticky="w")
+
+        ttk.Label(metric_frame, text="Angle column:").grid(
+            row=0, column=0, sticky="w")
         self.angle_combo = ttk.Combobox(
-            angle_frame,
+            metric_frame,
             textvariable=self.angle_var,
             values=["leftPedalCrankAngle", "rightPedalCrankAngle"],
             state="readonly",
             width=30,
         )
-        self.angle_combo.grid(row=1, column=1, sticky="w", padx=(8, 0))
+        self.angle_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
         self.close_loop_chk = ttk.Checkbutton(
-            angle_frame, text="Close loop", variable=self.close_loop_var)
-        self.close_loop_chk.grid(row=1, column=1, sticky="e", padx=(0, 70))
+            metric_frame, text="Close loop", variable=self.close_loop_var)
+        self.close_loop_chk.grid(row=0, column=2, sticky="e", padx=(10, 0))
 
-        metric_frame = ttk.Frame(project_plot_tab)
-        metric_frame.grid(row=10, column=0, sticky="ew", pady=(6, 2))
         ttk.Label(metric_frame, text="Metric column:").grid(
-            row=0, column=0, sticky="w")
+            row=1, column=0, sticky="w")
         self.metric_combo = ttk.Combobox(
-            metric_frame, textvariable=self.metric_var, values=[], state="readonly", width=26)
-        self.metric_combo.grid(row=0, column=1, sticky="w", padx=(5, 0))
+            metric_frame, textvariable=self.metric_var, values=[], state="readonly", width=30)
+        self.metric_combo.grid(row=1, column=1, sticky="w", padx=(8, 0))
         ttk.Label(metric_frame, text="Avg type:").grid(
-            row=0, column=2, sticky="w", padx=(10, 0))
+            row=1, column=2, sticky="e", padx=(10, 0))
         self.agg_combo = ttk.Combobox(
             metric_frame, textvariable=self.agg_var,
             values=["mean", "median", "10% trimmed mean"], state="readonly", width=16)
-        self.agg_combo.grid(row=0, column=3, sticky="w", padx=(6, 0))
+        self.agg_combo.grid(row=1, column=3, sticky="w", padx=(6, 0))
         self.agg_combo.bind("<<ComboboxSelected>>",
                             lambda _e: self._update_outlier_show_state())
 
-        outlier_row = ttk.Frame(metric_frame, style="OutlierRow.TFrame")
-        outlier_row.grid(row=1, column=0, columnspan=7,
-                         sticky="ew", pady=(4, 0))
+        outliers_group = ttk.LabelFrame(
+            plot_tab, text="Outliers", padding=8, style="Section.TLabelframe")
+        outliers_group.grid(row=5, column=0, sticky="ew", pady=(8, 0))
+        outliers_group.columnconfigure(0, weight=1)
+
+        outlier_row = ttk.Frame(outliers_group, style="OutlierRow.TFrame")
+        outlier_row.grid(row=1, column=0, sticky="ew")
         outlier_row.columnconfigure(0, weight=0)
         outlier_row.columnconfigure(1, weight=0)
         outlier_row.columnconfigure(2, weight=0)
@@ -858,14 +974,14 @@ class DashboardDataPlotter(tk.Tk):
         outlier_row.columnconfigure(5, weight=0)
         outlier_row.columnconfigure(6, weight=1)
 
-        ttk.Label(outlier_row, text="Remove Outliers", style="OutlierRow.TLabel").grid(
+        ttk.Label(outlier_row, text="Remove?", style="OutlierRow.TLabel").grid(
             row=0, column=0, sticky="w")
         self.outlier_chk = ttk.Checkbutton(
             outlier_row, text="", variable=self.remove_outliers_var,
             command=self._on_outlier_toggle, style="OutlierRow.TCheckbutton")
-        self.outlier_chk.grid(row=0, column=1, sticky="w", padx=(6, 0))
+        self.outlier_chk.grid(row=0, column=1, sticky="w", padx=(2, 0))
         ttk.Label(outlier_row, text="Method", style="OutlierRow.TLabel").grid(
-            row=0, column=2, sticky="w", padx=(10, 0))
+            row=0, column=2, sticky="w", padx=(6, 0))
         self.outlier_method_combo = ttk.Combobox(
             outlier_row,
             textvariable=self.outlier_method_var,
@@ -874,18 +990,30 @@ class DashboardDataPlotter(tk.Tk):
             width=12,
         )
         self.outlier_method_combo.grid(
-            row=0, column=3, sticky="w", padx=(6, 0))
+            row=0, column=3, sticky="w", padx=(2, 0))
         ttk.Label(outlier_row, text="Threshold", style="OutlierRow.TLabel").grid(
-            row=0, column=4, sticky="w", padx=(10, 0))
+            row=0, column=4, sticky="w", padx=(6, 0))
         self.outlier_entry = ttk.Entry(
             outlier_row, textvariable=self.outlier_thresh_var, width=8)
-        self.outlier_entry.grid(row=0, column=5, sticky="w", padx=(6, 0))
+        self.outlier_entry.grid(row=0, column=5, sticky="w", padx=(2, 0))
         self.outlier_show_chk = ttk.Checkbutton(
             outlier_row, text="Show", variable=self.show_outliers_var, style="OutlierRow.TCheckbutton")
-        self.outlier_show_chk.grid(row=0, column=6, sticky="w", padx=(20, 0))
+        self.outlier_show_chk.grid(row=0, column=6, sticky="w", padx=(10, 0))
+        self.outlier_warnings_chk = ttk.Checkbutton(
+            outlier_row,
+            text="Warnings?",
+            variable=self.outlier_warnings_var,
+            command=self._on_outlier_warnings_toggle,
+        )
+        self.outlier_warnings_chk.grid(row=0, column=7, sticky="e")
 
-        range_frame = ttk.Frame(project_plot_tab)
-        range_frame.grid(row=11, column=0, sticky="ew", pady=(6, 2))
+        range_group = ttk.LabelFrame(
+            plot_tab, text="Range", padding=8, style="Section.TLabelframe")
+        range_group.grid(row=6, column=0, sticky="ew", pady=(8, 0))
+        range_group.columnconfigure(0, weight=1)
+
+        range_frame = ttk.Frame(range_group)
+        range_frame.grid(row=0, column=0, sticky="ew")
         ttk.Label(range_frame, text="Range (min, max):").grid(
             row=0, column=0, sticky="w")
         self.range_low_entry = ttk.Entry(
@@ -897,17 +1025,17 @@ class DashboardDataPlotter(tk.Tk):
         self.range_fixed_chk = ttk.Checkbutton(
             range_frame, text="Fixed", variable=self.range_fixed_var)
         self.range_fixed_chk.grid(row=0, column=3, sticky="w", padx=(8, 0))
-        self.original_binned_btn = ttk.Button(
-            range_frame, text="Original Dashboard Bins", command=self._on_original_binned_toggle)
-        self.original_binned_btn.grid(
-            row=0, column=4, sticky="w", padx=(20, 0))
 
-        ttk.Separator(project_plot_tab).grid(row=12, column=0, sticky="ew", pady=6)
+        plot_modes_group = ttk.LabelFrame(
+            plot_tab, text="Mode", padding=8, style="Section.TLabelframe")
+        plot_modes_group.grid(row=7, column=0, sticky="ew", pady=(8, 0))
+        plot_modes_group.columnconfigure(0, weight=1)
 
         # Value mode
-        vm_row = ttk.Frame(project_plot_tab)
-        vm_row.grid(row=13, column=0, sticky="ew")
-        ttk.Label(vm_row, text="Value mode", font=("Segoe UI", 11, "bold")).grid(
+        vm_row = ttk.Frame(plot_modes_group)
+        vm_row.grid(row=0, column=0, sticky="ew")
+        vm_row.columnconfigure(3, weight=1)
+        ttk.Label(vm_row, text="Value:").grid(
             row=0, column=0, sticky="w")
         self.rb_absolute = ttk.Radiobutton(
             vm_row, text="Absolute metric values", variable=self.value_mode_var,
@@ -916,14 +1044,19 @@ class DashboardDataPlotter(tk.Tk):
         self.rb_percent_mean = ttk.Radiobutton(
             vm_row, text="% of dataset mean", variable=self.value_mode_var, value="percent_mean")
         self.rb_percent_mean.grid(row=0, column=2, sticky="w", padx=(20, 0))
+        self.original_binned_btn = ttk.Button(
+            vm_row, text="Original Dashboard Bins", command=self._on_original_binned_toggle)
+        self.original_binned_btn.grid(
+            row=0, column=4, sticky="e", padx=(10, 0))
 
-        ttk.Separator(project_plot_tab).grid(row=14, column=0, sticky="ew", pady=6)
+        ttk.Separator(plot_modes_group).grid(
+            row=1, column=0, sticky="ew", pady=6)
 
         # Comparison mode
-        comp_row = ttk.Frame(project_plot_tab)
-        comp_row.grid(row=15, column=0, sticky="ew")
-        ttk.Label(comp_row, text="Comparison", font=(
-            "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+        comp_row = ttk.Frame(plot_modes_group)
+        comp_row.grid(row=2, column=0, sticky="ew")
+        ttk.Label(comp_row, text="Comparison:").grid(
+            row=0, column=0, sticky="w")
         self.chk_compare = ttk.Checkbutton(
             comp_row, text="Difference vs Baseline:", variable=self.compare_var,
             command=self._on_compare_toggle)
@@ -939,10 +1072,13 @@ class DashboardDataPlotter(tk.Tk):
         self.baseline_menu_btn.bind(
             "<space>", self._toggle_baseline_popup, add=True)
 
-        ttk.Separator(project_plot_tab).grid(row=16, column=0, sticky="ew", pady=6)
+        plot_actions_group = ttk.LabelFrame(
+            plot_tab, text="Plot actions and history", padding=8, style="Section.TLabelframe")
+        plot_actions_group.grid(row=8, column=0, sticky="ew", pady=(8, 0))
+        plot_actions_group.columnconfigure(0, weight=1)
 
-        plot_btns = ttk.Frame(project_plot_tab)
-        plot_btns.grid(row=17, column=0, sticky="ew", pady=(10, 0))
+        plot_btns = ttk.Frame(plot_actions_group)
+        plot_btns.grid(row=0, column=0, sticky="ew")
         plot_btns.columnconfigure(0, weight=1)
         self.plot_btn = ttk.Button(
             plot_btns, text="Plot / Refresh", command=self.plot)
@@ -980,66 +1116,86 @@ class DashboardDataPlotter(tk.Tk):
         self.status = tk.StringVar(
             value="Load one or more JSON files, or paste a dataset object, to begin.")
 
-        bold_sep = tk.Frame(project_plot_tab, height=3, bg="#444")
-        bold_sep.grid(row=18, column=0, sticky="ew", pady=6)
+        ttk.Label(report_tab, text="Reports", font=(
+            "Segoe UI", 12, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            report_tab,
+            text="Create, edit, preview, and export report content independently of project/data setup.",
+            foreground="#555",
+            wraplength=380,
+        ).grid(row=1, column=0, sticky="w", pady=(2, 8))
 
-        report_header = ttk.Frame(report_tab)
-        report_header.grid(row=19, column=0, sticky="ew")
-        ttk.Label(report_header, text="Reports", font=(
-            "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
-        report_btns = ttk.Frame(report_header)
-        report_btns.grid(row=0, column=1, sticky="e", padx=(12, 0))
+        report_btns = ttk.LabelFrame(
+            report_tab, text="Report file", padding=8, style="Section.TLabelframe")
+        report_btns.grid(row=2, column=0, sticky="ew")
+        report_btns.columnconfigure(0, weight=1)
+        report_btns.columnconfigure(1, weight=1)
+        report_btns.columnconfigure(2, weight=1)
+        report_btns.columnconfigure(3, weight=1)
         self.btn_new_report = ttk.Button(
             report_btns, text="New report...", command=self.new_report, width=12)
-        self.btn_new_report.grid(row=0, column=0, sticky="w")
+        self.btn_new_report.grid(row=0, column=0, sticky="ew")
         self.btn_open_report = ttk.Button(
             report_btns, text="Open report...", command=self.open_report, width=12)
-        self.btn_open_report.grid(row=0, column=1, padx=(6, 0))
+        self.btn_open_report.grid(row=0, column=1, sticky="ew", padx=(6, 0))
         self.btn_manage_report = ttk.Button(
             report_btns, text="Edit report", command=self.manage_report_content, width=14)
-        self.btn_manage_report.grid(row=0, column=2, padx=(6, 0))
+        self.btn_manage_report.grid(row=0, column=2, sticky="ew", padx=(6, 0))
         self.btn_save_report = ttk.Button(
             report_btns, text="Save report", command=self.save_report, width=12)
-        self.btn_save_report.grid(row=0, column=3, padx=(6, 0))
+        self.btn_save_report.grid(row=0, column=3, sticky="ew", padx=(6, 0))
 
-        report_btns2 = ttk.Frame(report_tab)
-        report_btns2.grid(row=20, column=0, sticky="ew", pady=(6, 0))
+        report_btns2 = ttk.LabelFrame(
+            report_tab, text="Content and annotations", padding=8, style="Section.TLabelframe")
+        report_btns2.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        report_btns2.columnconfigure(0, weight=1)
+        report_btns2.columnconfigure(1, weight=1)
+        report_btns2.columnconfigure(2, weight=0)
+        report_btns2.columnconfigure(3, weight=1)
         self.btn_add_text_block = ttk.Button(
             report_btns2, text="Add content", command=self.add_report_text_block, width=14)
-        self.btn_add_text_block.grid(row=0, column=0, padx=(6, 0))
+        self.btn_add_text_block.grid(row=0, column=0, sticky="ew")
         self.btn_add_snapshot = ttk.Button(
             report_btns2, text="Add plot snapshot", command=self.add_report_snapshot, width=17)
-        self.btn_add_snapshot.grid(row=0, column=1, padx=(6, 0))
+        self.btn_add_snapshot.grid(row=0, column=1, sticky="ew", padx=(6, 0))
         self.chk_annotate = ttk.Checkbutton(
             report_btns2, text="Annotate", variable=self.annotation_mode_var,
             command=self._on_annotation_toggle)
-        self.chk_annotate.grid(row=0, column=2, padx=(10, 0))
+        self.chk_annotate.grid(row=0, column=2, sticky="w", padx=(10, 0))
         self.btn_clear_annotations = ttk.Button(
             report_btns2, text="Clear annotations", command=self.clear_annotations)
-        self.btn_clear_annotations.grid(row=0, column=3, padx=(6, 0))
+        self.btn_clear_annotations.grid(
+            row=0, column=3, sticky="ew", padx=(6, 0))
 
-        report_btns3 = ttk.Frame(report_tab)
-        report_btns3.grid(row=21, column=0, sticky="ew", pady=(6, 0))
+        report_btns3 = ttk.LabelFrame(
+            report_tab, text="Preview and export", padding=8, style="Section.TLabelframe")
+        report_btns3.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        report_btns3.columnconfigure(0, weight=1)
+        report_btns3.columnconfigure(1, weight=0)
+        report_btns3.columnconfigure(2, weight=1)
+        report_btns3.columnconfigure(3, weight=1)
         self.btn_view_report = ttk.Button(
             report_btns3, text="Preview report", command=self.view_report, width=13)
-        self.btn_view_report.grid(row=0, column=0, padx=(6, 0))
+        self.btn_view_report.grid(row=0, column=0, sticky="ew")
         self.chk_report_include_meta = ttk.Checkbutton(
             report_btns3,
             text="Incl meta",
             variable=self.report_hide_meta_var,
             command=self._on_report_include_meta_toggle,
         )
-        self.chk_report_include_meta.grid(row=0, column=1, padx=(8, 0))
+        self.chk_report_include_meta.grid(
+            row=0, column=1, sticky="w", padx=(8, 8))
 
         self.btn_export_report_html = ttk.Button(
             report_btns3, text="Export HTML...", command=self.export_report_html, width=12)
-        self.btn_export_report_html.grid(row=0, column=2, sticky="w")
+        self.btn_export_report_html.grid(row=0, column=2, sticky="ew")
         self.btn_export_report_pdf = ttk.Button(
             report_btns3, text="Export PDF...", command=self.export_report_pdf, width=12)
-        self.btn_export_report_pdf.grid(row=0, column=3, padx=(6, 0))
+        self.btn_export_report_pdf.grid(
+            row=0, column=3, sticky="ew", padx=(6, 0))
 
         ttk.Label(left, textvariable=self.status, wraplength=380, foreground="#333").grid(
-            row=1, column=0, sticky="ew", pady=(10, 0))
+            row=2, column=0, sticky="ew", pady=(10, 0))
 
         self._on_plot_type_change(apply_default_agg=False)
         self._set_compare_controls_state()
@@ -1059,6 +1215,40 @@ class DashboardDataPlotter(tk.Tk):
             else:
                 self.files_tree.item(sid, values=(show_txt, display))
             self.files_tree.move(sid, "", index)
+        self._sync_plot_datasets_tree_from_state()
+
+    def _sync_plot_datasets_tree_from_state(self) -> None:
+        tree = getattr(self, "plot_datasets_tree", None)
+        if tree is None:
+            return
+        order = list(ordered_source_ids(self.state))
+        for iid in tree.get_children(""):
+            if iid not in self.state.loaded:
+                tree.delete(iid)
+        for index, sid in enumerate(order):
+            display = self.state.id_to_display.get(sid, sid)
+            show_txt = "\u2713" if self.state.show_flag.get(sid, True) else ""
+            if not tree.exists(sid):
+                tree.insert("", "end", iid=sid, values=(show_txt, display))
+            else:
+                tree.item(sid, values=(show_txt, display))
+            tree.move(sid, "", index)
+
+    def _on_plot_datasets_tree_click(self, event):
+        tree = getattr(self, "plot_datasets_tree", None)
+        if tree is None:
+            return
+        region = tree.identify("region", event.x, event.y)
+        if region != "cell":
+            return
+        col = tree.identify_column(event.x)
+        if col != "#1":
+            return
+        row_id = tree.identify_row(event.y)
+        if not row_id:
+            return
+        self.toggle_show(row_id)
+        return "break"
 
     def _sync_state_settings_from_ui(self):
         set_plot_type(self.state, self.plot_type_var.get())
@@ -1258,7 +1448,9 @@ class DashboardDataPlotter(tk.Tk):
             (self.btn_rename, "Rename the selected dataset."),
             (self.btn_move_up, "Move the selected dataset(s) up in plot order."),
             (self.btn_move_down, "Move the selected dataset(s) down in plot order."),
-            (self.files_tree, "Datasets in plot order. Click 'Show' to toggle visibility."),
+            (self.files_tree, "Datasets in project/plot order. Rename, select, and reorder here; visibility is controlled on the Plot tab."),
+            (self.plot_datasets_tree,
+             "Plot-tab datasets in plot order. Click the Show column to toggle plot visibility."),
             (self.paste_text,
              "Paste a JSON dataset object or a multi-dataset JSON blob here."),
             (self.btn_load_paste, "Load datasets from the pasted JSON."),
@@ -1380,7 +1572,8 @@ class DashboardDataPlotter(tk.Tk):
             return
         if x_values.size == 0 or y_line.size == 0:
             return
-        y_display = y_line if y_values is None else np.asarray(y_values, dtype=float)
+        y_display = y_line if y_values is None else np.asarray(
+            y_values, dtype=float)
         if y_display.size != y_line.size:
             y_display = y_line
         if x_display is None:
@@ -1429,8 +1622,10 @@ class DashboardDataPlotter(tk.Tk):
 
     def _probe_text_for_hit(self, hit: dict) -> str:
         label = str(hit.get("label", "") or "Point")
-        x_text = self._format_probe_value(hit.get("x_display", hit.get("x_data")))
-        y_text = self._format_probe_value(hit.get("y_display", hit.get("y_data")))
+        x_text = self._format_probe_value(
+            hit.get("x_display", hit.get("x_data")))
+        y_text = self._format_probe_value(
+            hit.get("y_display", hit.get("y_data")))
         return f"{label}\nx: {x_text}\ny: {y_text}"
 
     def _hit_test_plot_point(self, event) -> dict | None:
@@ -1465,8 +1660,10 @@ class DashboardDataPlotter(tk.Tk):
                     if idx < 0 or idx >= len(x_vals) or idx >= len(y_vals):
                         continue
                     try:
-                        px, py = artist.axes.transData.transform((x_vals[idx], y_vals[idx]))
-                        dist = ((float(px) - float(ex)) ** 2 + (float(py) - float(ey)) ** 2) ** 0.5
+                        px, py = artist.axes.transData.transform(
+                            (x_vals[idx], y_vals[idx]))
+                        dist = ((float(px) - float(ex)) ** 2 +
+                                (float(py) - float(ey)) ** 2) ** 0.5
                     except Exception:
                         dist = 0.0
                     if best_dist is None or dist < best_dist:
@@ -1487,7 +1684,8 @@ class DashboardDataPlotter(tk.Tk):
                 y_val = float(target.get("y_data", 0.0))
                 try:
                     px, py = artist.axes.transData.transform((x_val, y_val))
-                    dist = ((float(px) - float(ex)) ** 2 + (float(py) - float(ey)) ** 2) ** 0.5
+                    dist = ((float(px) - float(ex)) ** 2 +
+                            (float(py) - float(ey)) ** 2) ** 0.5
                 except Exception:
                     dist = 0.0
                 if best_dist is None or dist < best_dist:
@@ -1526,7 +1724,8 @@ class DashboardDataPlotter(tk.Tk):
                     va="bottom",
                     fontsize=8,
                     color="#111111",
-                    bbox=dict(boxstyle="round,pad=0.2", fc="#fffff2", ec="#999999", alpha=0.95),
+                    bbox=dict(boxstyle="round,pad=0.2", fc="#fffff2",
+                              ec="#999999", alpha=0.95),
                     zorder=20,
                 )
                 ann.set_visible(False)
@@ -1565,7 +1764,8 @@ class DashboardDataPlotter(tk.Tk):
                 return
         else:
             try:
-                marker.set_offsets(np.array([[hit["x_data"], hit["y_data"]]], dtype=float))
+                marker.set_offsets(
+                    np.array([[hit["x_data"], hit["y_data"]]], dtype=float))
             except Exception:
                 try:
                     marker.remove()
@@ -2083,7 +2283,8 @@ class DashboardDataPlotter(tk.Tk):
             return
         fmt = self._annotation_format_payload()
         if index < len(self._annotations) and isinstance(self._annotations[index], dict):
-            fmt = self._normalize_annotation_format(self._annotations[index].get("format", {}))
+            fmt = self._normalize_annotation_format(
+                self._annotations[index].get("format", {}))
             self._annotations[index]["format"] = dict(fmt)
         fmt["offset_x"] = int(round(float(offset_x)))
         fmt["offset_y"] = int(round(float(offset_y)))
@@ -4572,13 +4773,9 @@ class DashboardDataPlotter(tk.Tk):
         for sid, flag in snap.get("show_flag", {}).items():
             if sid in self.state.loaded:
                 self.state.show_flag[sid] = bool(flag)
-                if self.files_tree.exists(sid):
-                    name = self.files_tree.item(sid, "values")[1]
-                    show_txt = "\u2713" if self.state.show_flag.get(
-                        sid, True) else ""
-                    self.files_tree.item(sid, values=(show_txt, name))
             else:
                 missing.append(sid)
+        self._sync_treeview_from_state()
 
         self.angle_var.set(snap.get("angle", self.angle_var.get()))
         self.metric_var.set(snap.get("metric", self.metric_var.get()))
@@ -4706,6 +4903,13 @@ class DashboardDataPlotter(tk.Tk):
 
     # ---------------- Tree / list actions ----------------
     def _on_tree_click(self, event):
+        display_cols = self.files_tree.cget("displaycolumns")
+        if isinstance(display_cols, str):
+            show_visible = "show" in display_cols
+        else:
+            show_visible = "show" in tuple(display_cols)
+        if not show_visible:
+            return
         region = self.files_tree.identify("region", event.x, event.y)
         if region != "cell":
             return
@@ -4731,11 +4935,8 @@ class DashboardDataPlotter(tk.Tk):
         self.rename_dataset(row_id)
 
     def toggle_show(self, source_id: str):
-        new = toggle_show_flag(self.state, source_id)
-        show_txt = "\u2713" if new else ""
-        if self.files_tree.exists(source_id):
-            name = self.files_tree.item(source_id, "values")[1]
-            self.files_tree.item(source_id, values=(show_txt, name))
+        toggle_show_flag(self.state, source_id)
+        self._sync_treeview_from_state()
 
     def toggle_all_show(self):
         items = list(ordered_source_ids(self.state))
@@ -4744,12 +4945,8 @@ class DashboardDataPlotter(tk.Tk):
         any_hidden = any(not self.state.show_flag.get(iid, True)
                          for iid in items)
         new_state = True if any_hidden else False
-        show_txt = "\u2713" if new_state else ""
         set_all_show_flags(self.state, new_state, items)
-        for iid in items:
-            if self.files_tree.exists(iid):
-                name = self.files_tree.item(iid, "values")[1]
-                self.files_tree.item(iid, values=(show_txt, name))
+        self._sync_treeview_from_state()
 
     def rename_selected(self):
         sel = list(self.files_tree.selection())
@@ -4826,10 +5023,7 @@ class DashboardDataPlotter(tk.Tk):
         if not new_name:
             return
         new_name = state_rename_dataset(self.state, source_id, new_name)
-        if self.files_tree.exists(source_id):
-            show_txt = "\u2713" if self.state.show_flag.get(
-                source_id, True) else ""
-            self.files_tree.item(source_id, values=(show_txt, new_name))
+        self._sync_treeview_from_state()
         if self.baseline_display_var.get() == old:
             self.baseline_display_var.set(new_name)
         self.refresh_baseline_choices()
@@ -5435,9 +5629,8 @@ class DashboardDataPlotter(tk.Tk):
         self.show_outliers_var.set(False)
         self.outlier_warnings_var.set(True)
         self.sentinels_var.set(DEFAULT_SENTINELS)
-        for iid in self.files_tree.get_children(""):
-            self.files_tree.delete(iid)
         self.state.clear()
+        self._sync_treeview_from_state()
         self._annotation_format = self._default_annotation_format()
         self._history.clear()
         self._history_index = -1
@@ -5677,9 +5870,8 @@ class DashboardDataPlotter(tk.Tk):
             self._redraw_empty()
 
     def clear_all(self):
-        for iid in self.files_tree.get_children(""):
-            self.files_tree.delete(iid)
         self.state.clear()
+        self._sync_treeview_from_state()
         self._history.clear()
         self._history_index = -1
         self._update_history_buttons()

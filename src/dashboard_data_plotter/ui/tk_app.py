@@ -233,6 +233,9 @@ class DashboardDataPlotter(tk.Tk):
         self._annotation_format = self._default_annotation_format()
         self._annotation_drag_state = None
         self._load_annotation_format_from_project_options()
+        self._plot_hover_targets = []
+        self._plot_hover_annotation = None
+        self._plot_selected_marker = None
 
         self._init_styles()
         self._build_ui()
@@ -631,8 +634,20 @@ class DashboardDataPlotter(tk.Tk):
 
         left = ttk.Frame(self, padding=10)
         left.grid(row=0, column=0, sticky="ns")
+        left.columnconfigure(0, weight=1)
+        left.rowconfigure(0, weight=1)
 
-        proj_btns = ttk.Frame(left)
+        left_notebook = ttk.Notebook(left)
+        left_notebook.grid(row=0, column=0, sticky="nsew")
+
+        project_plot_tab = ttk.Frame(left_notebook, padding=8)
+        report_tab = ttk.Frame(left_notebook, padding=8)
+        project_plot_tab.columnconfigure(0, weight=1)
+        report_tab.columnconfigure(0, weight=1)
+        left_notebook.add(project_plot_tab, text="Project / Plot")
+        left_notebook.add(report_tab, text="Reports")
+
+        proj_btns = ttk.Frame(project_plot_tab)
         proj_btns.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         self.btn_new_project = ttk.Button(
             proj_btns, text="New project", command=self.new_project, width=12)
@@ -650,7 +665,7 @@ class DashboardDataPlotter(tk.Tk):
             proj_btns, text="Change log", command=self._open_changelog, width=12)
         self.btn_change_log.grid(row=0, column=4, sticky="e", padx=(0, 0))
 
-        data_btns = ttk.Frame(left)
+        data_btns = ttk.Frame(project_plot_tab)
         data_btns.grid(row=2, column=0, sticky="ew", pady=(0, 0))
         ttk.Label(data_btns, text="Data sources", font=(
             "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
@@ -674,7 +689,7 @@ class DashboardDataPlotter(tk.Tk):
         self.btn_move_down.grid(row=0, column=6, padx=(3, 0), pady=(0, 0))
 
         # Treeview: show checkbox + dataset name
-        tv_frame = ttk.Frame(left)
+        tv_frame = ttk.Frame(project_plot_tab)
         tv_frame.grid(row=3, column=0, sticky="ew")
         tv_frame.columnconfigure(0, weight=1)
 
@@ -706,12 +721,12 @@ class DashboardDataPlotter(tk.Tk):
             "<Double-1>", self._on_tree_double_click, add=True)
 
         # --- Paste JSON sources
-        paste_header = ttk.Frame(left)
+        paste_header = ttk.Frame(project_plot_tab)
         paste_header.grid(row=4, column=0, sticky="w", pady=(0, 5))
         ttk.Label(paste_header, text="Paste data source", font=(
             "Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=(0, 0))
 
-        paste_btns = ttk.Frame(left)
+        paste_btns = ttk.Frame(project_plot_tab)
         paste_btns.grid(row=4, column=0, sticky="e",
                         padx=(0, 30), pady=(10, 0))
         self.btn_load_paste = ttk.Button(
@@ -724,7 +739,7 @@ class DashboardDataPlotter(tk.Tk):
             paste_btns, text="Clear pasted data", command=self.clear_paste)
         self.btn_clear_paste.grid(row=0, column=2, padx=(6, 0))
 
-        paste_frame = ttk.Frame(left)
+        paste_frame = ttk.Frame(project_plot_tab)
         paste_frame.grid(row=5, column=0, sticky="ew")
 
         self.paste_text = tk.Text(paste_frame, height=6, width=60, wrap="none")
@@ -750,13 +765,13 @@ class DashboardDataPlotter(tk.Tk):
 
         self.paste_text.bind("<Button-3>", self._show_paste_menu, add=True)
 
-        ttk.Separator(left).grid(row=7, column=0, sticky="ew", pady=10)
+        ttk.Separator(project_plot_tab).grid(row=7, column=0, sticky="ew", pady=10)
 
-        ttk.Label(left, text="Plot settings", font=(
+        ttk.Label(project_plot_tab, text="Plot settings", font=(
             "Segoe UI", 11, "bold")).grid(row=8, column=0, sticky="w")
 
         self.outlier_warnings_chk = ttk.Checkbutton(
-            left,
+            project_plot_tab,
             text="Outlier warnings?",
             variable=self.outlier_warnings_var,
             command=self._on_outlier_warnings_toggle,
@@ -764,7 +779,7 @@ class DashboardDataPlotter(tk.Tk):
         self.outlier_warnings_chk.grid(
             row=8, column=0, sticky="e", padx=(180, 0))
 
-        angle_frame = ttk.Frame(left)
+        angle_frame = ttk.Frame(project_plot_tab)
         angle_frame.grid(row=9, column=0, sticky="ew", pady=(6, 2))
 
         # Plot type (radar/cartesian/bar)
@@ -816,7 +831,7 @@ class DashboardDataPlotter(tk.Tk):
             angle_frame, text="Close loop", variable=self.close_loop_var)
         self.close_loop_chk.grid(row=1, column=1, sticky="e", padx=(0, 70))
 
-        metric_frame = ttk.Frame(left)
+        metric_frame = ttk.Frame(project_plot_tab)
         metric_frame.grid(row=10, column=0, sticky="ew", pady=(6, 2))
         ttk.Label(metric_frame, text="Metric column:").grid(
             row=0, column=0, sticky="w")
@@ -869,7 +884,7 @@ class DashboardDataPlotter(tk.Tk):
             outlier_row, text="Show", variable=self.show_outliers_var, style="OutlierRow.TCheckbutton")
         self.outlier_show_chk.grid(row=0, column=6, sticky="w", padx=(20, 0))
 
-        range_frame = ttk.Frame(left)
+        range_frame = ttk.Frame(project_plot_tab)
         range_frame.grid(row=11, column=0, sticky="ew", pady=(6, 2))
         ttk.Label(range_frame, text="Range (min, max):").grid(
             row=0, column=0, sticky="w")
@@ -887,10 +902,10 @@ class DashboardDataPlotter(tk.Tk):
         self.original_binned_btn.grid(
             row=0, column=4, sticky="w", padx=(20, 0))
 
-        ttk.Separator(left).grid(row=12, column=0, sticky="ew", pady=6)
+        ttk.Separator(project_plot_tab).grid(row=12, column=0, sticky="ew", pady=6)
 
         # Value mode
-        vm_row = ttk.Frame(left)
+        vm_row = ttk.Frame(project_plot_tab)
         vm_row.grid(row=13, column=0, sticky="ew")
         ttk.Label(vm_row, text="Value mode", font=("Segoe UI", 11, "bold")).grid(
             row=0, column=0, sticky="w")
@@ -902,10 +917,10 @@ class DashboardDataPlotter(tk.Tk):
             vm_row, text="% of dataset mean", variable=self.value_mode_var, value="percent_mean")
         self.rb_percent_mean.grid(row=0, column=2, sticky="w", padx=(20, 0))
 
-        ttk.Separator(left).grid(row=14, column=0, sticky="ew", pady=6)
+        ttk.Separator(project_plot_tab).grid(row=14, column=0, sticky="ew", pady=6)
 
         # Comparison mode
-        comp_row = ttk.Frame(left)
+        comp_row = ttk.Frame(project_plot_tab)
         comp_row.grid(row=15, column=0, sticky="ew")
         ttk.Label(comp_row, text="Comparison", font=(
             "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
@@ -924,9 +939,9 @@ class DashboardDataPlotter(tk.Tk):
         self.baseline_menu_btn.bind(
             "<space>", self._toggle_baseline_popup, add=True)
 
-        ttk.Separator(left).grid(row=16, column=0, sticky="ew", pady=6)
+        ttk.Separator(project_plot_tab).grid(row=16, column=0, sticky="ew", pady=6)
 
-        plot_btns = ttk.Frame(left)
+        plot_btns = ttk.Frame(project_plot_tab)
         plot_btns.grid(row=17, column=0, sticky="ew", pady=(10, 0))
         plot_btns.columnconfigure(0, weight=1)
         self.plot_btn = ttk.Button(
@@ -965,10 +980,10 @@ class DashboardDataPlotter(tk.Tk):
         self.status = tk.StringVar(
             value="Load one or more JSON files, or paste a dataset object, to begin.")
 
-        bold_sep = tk.Frame(left, height=3, bg="#444")
+        bold_sep = tk.Frame(project_plot_tab, height=3, bg="#444")
         bold_sep.grid(row=18, column=0, sticky="ew", pady=6)
 
-        report_header = ttk.Frame(left)
+        report_header = ttk.Frame(report_tab)
         report_header.grid(row=19, column=0, sticky="ew")
         ttk.Label(report_header, text="Reports", font=(
             "Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
@@ -987,7 +1002,7 @@ class DashboardDataPlotter(tk.Tk):
             report_btns, text="Save report", command=self.save_report, width=12)
         self.btn_save_report.grid(row=0, column=3, padx=(6, 0))
 
-        report_btns2 = ttk.Frame(left)
+        report_btns2 = ttk.Frame(report_tab)
         report_btns2.grid(row=20, column=0, sticky="ew", pady=(6, 0))
         self.btn_add_text_block = ttk.Button(
             report_btns2, text="Add content", command=self.add_report_text_block, width=14)
@@ -1003,7 +1018,7 @@ class DashboardDataPlotter(tk.Tk):
             report_btns2, text="Clear annotations", command=self.clear_annotations)
         self.btn_clear_annotations.grid(row=0, column=3, padx=(6, 0))
 
-        report_btns3 = ttk.Frame(left)
+        report_btns3 = ttk.Frame(report_tab)
         report_btns3.grid(row=21, column=0, sticky="ew", pady=(6, 0))
         self.btn_view_report = ttk.Button(
             report_btns3, text="Preview report", command=self.view_report, width=13)
@@ -1024,7 +1039,7 @@ class DashboardDataPlotter(tk.Tk):
         self.btn_export_report_pdf.grid(row=0, column=3, padx=(6, 0))
 
         ttk.Label(left, textvariable=self.status, wraplength=380, foreground="#333").grid(
-            row=22, column=0, sticky="w", pady=(10, 0))
+            row=1, column=0, sticky="ew", pady=(10, 0))
 
         self._on_plot_type_change(apply_default_agg=False)
         self._set_compare_controls_state()
@@ -1328,6 +1343,7 @@ class DashboardDataPlotter(tk.Tk):
             ToolTip(widget, text)
 
     def _redraw_empty(self):
+        self._reset_plot_hover_state(redraw=False)
         if getattr(self.ax, "name", "") != "polar":
             self.fig.clf()
             self.ax = self.fig.add_subplot(111, projection="polar")
@@ -1337,6 +1353,226 @@ class DashboardDataPlotter(tk.Tk):
         self.ax.set_title("Load data → choose metric & angle → Plot", pad=18)
         self.ax.grid(True)
         # self.ax.set_position([0.05, 0.08, 0.8, 0.8])
+        self.canvas.draw_idle()
+
+    def _reset_plot_hover_state(self, redraw: bool = False) -> None:
+        self._plot_hover_targets = []
+        for attr in ("_plot_hover_annotation", "_plot_selected_marker"):
+            artist = getattr(self, attr, None)
+            if artist is None:
+                continue
+            try:
+                artist.remove()
+            except Exception:
+                pass
+            setattr(self, attr, None)
+        if redraw:
+            self.canvas.draw_idle()
+
+    def _register_line_hover_trace(self, line, *, label: str, source_id: str = "",
+                                   x_display=None, y_values=None) -> None:
+        if line is None:
+            return
+        try:
+            x_values = np.asarray(line.get_xdata(), dtype=float)
+            y_line = np.asarray(line.get_ydata(), dtype=float)
+        except Exception:
+            return
+        if x_values.size == 0 or y_line.size == 0:
+            return
+        y_display = y_line if y_values is None else np.asarray(y_values, dtype=float)
+        if y_display.size != y_line.size:
+            y_display = y_line
+        if x_display is None:
+            x_disp = x_values
+        else:
+            x_disp = np.asarray(x_display)
+            if x_disp.size != x_values.size:
+                x_disp = x_values
+        self._plot_hover_targets.append({
+            "kind": "line",
+            "artist": line,
+            "label": str(label or ""),
+            "source_id": str(source_id or ""),
+            "x_data": x_values,
+            "y_data": y_line,
+            "x_display": x_disp,
+            "y_display": y_display,
+        })
+
+    def _register_bar_hover_targets(self, bars, labels, values) -> None:
+        for bar, label, y_val in zip(list(bars), list(labels), np.asarray(values, dtype=float)):
+            try:
+                x_pos = float(bar.get_x() + (bar.get_width() / 2.0))
+            except Exception:
+                continue
+            self._plot_hover_targets.append({
+                "kind": "bar",
+                "artist": bar,
+                "label": str(label or ""),
+                "x_data": x_pos,
+                "y_data": float(y_val),
+                "x_display": str(label or ""),
+                "y_display": float(y_val),
+            })
+
+    def _format_probe_value(self, value) -> str:
+        if isinstance(value, (str, bytes)):
+            return str(value)
+        try:
+            num = float(value)
+        except Exception:
+            return str(value)
+        if not np.isfinite(num):
+            return str(value)
+        return f"{num:.6g}"
+
+    def _probe_text_for_hit(self, hit: dict) -> str:
+        label = str(hit.get("label", "") or "Point")
+        x_text = self._format_probe_value(hit.get("x_display", hit.get("x_data")))
+        y_text = self._format_probe_value(hit.get("y_display", hit.get("y_data")))
+        return f"{label}\nx: {x_text}\ny: {y_text}"
+
+    def _hit_test_plot_point(self, event) -> dict | None:
+        if getattr(event, "inaxes", None) != self.ax:
+            return None
+        ex = getattr(event, "x", None)
+        ey = getattr(event, "y", None)
+        if ex is None or ey is None:
+            return None
+        best = None
+        best_dist = None
+        for target in reversed(list(self._plot_hover_targets)):
+            artist = target.get("artist")
+            if artist is None:
+                continue
+            try:
+                contains, details = artist.contains(event)
+            except Exception:
+                continue
+            if not contains:
+                continue
+            kind = target.get("kind")
+            if kind == "line":
+                inds = list((details or {}).get("ind") or [])
+                if not inds:
+                    continue
+                x_vals = target.get("x_data")
+                y_vals = target.get("y_data")
+                x_disp_vals = target.get("x_display")
+                y_disp_vals = target.get("y_display")
+                for idx in inds:
+                    if idx < 0 or idx >= len(x_vals) or idx >= len(y_vals):
+                        continue
+                    try:
+                        px, py = artist.axes.transData.transform((x_vals[idx], y_vals[idx]))
+                        dist = ((float(px) - float(ex)) ** 2 + (float(py) - float(ey)) ** 2) ** 0.5
+                    except Exception:
+                        dist = 0.0
+                    if best_dist is None or dist < best_dist:
+                        best_dist = dist
+                        best = {
+                            "kind": "line",
+                            "target": target,
+                            "artist": artist,
+                            "index": int(idx),
+                            "x_data": float(x_vals[idx]),
+                            "y_data": float(y_vals[idx]),
+                            "x_display": x_disp_vals[idx] if idx < len(x_disp_vals) else x_vals[idx],
+                            "y_display": y_disp_vals[idx] if idx < len(y_disp_vals) else y_vals[idx],
+                            "label": target.get("label", ""),
+                        }
+            elif kind == "bar":
+                x_val = float(target.get("x_data", 0.0))
+                y_val = float(target.get("y_data", 0.0))
+                try:
+                    px, py = artist.axes.transData.transform((x_val, y_val))
+                    dist = ((float(px) - float(ex)) ** 2 + (float(py) - float(ey)) ** 2) ** 0.5
+                except Exception:
+                    dist = 0.0
+                if best_dist is None or dist < best_dist:
+                    best_dist = dist
+                    best = {
+                        "kind": "bar",
+                        "target": target,
+                        "artist": artist,
+                        "index": 0,
+                        "x_data": x_val,
+                        "y_data": y_val,
+                        "x_display": target.get("x_display", x_val),
+                        "y_display": target.get("y_display", y_val),
+                        "label": target.get("label", ""),
+                    }
+        return best
+
+    def _update_plot_hover_tooltip(self, event) -> None:
+        if self.use_plotly_var.get():
+            return
+        hit = self._hit_test_plot_point(event)
+        ann = self._plot_hover_annotation
+        if hit is None:
+            if ann is not None and ann.get_visible():
+                ann.set_visible(False)
+                self.canvas.draw_idle()
+            return
+        if ann is None or getattr(ann, "axes", None) != self.ax:
+            try:
+                ann = self.ax.annotate(
+                    "",
+                    xy=(0, 0),
+                    xytext=(10, 10),
+                    textcoords="offset points",
+                    ha="left",
+                    va="bottom",
+                    fontsize=8,
+                    color="#111111",
+                    bbox=dict(boxstyle="round,pad=0.2", fc="#fffff2", ec="#999999", alpha=0.95),
+                    zorder=20,
+                )
+                ann.set_visible(False)
+                self._plot_hover_annotation = ann
+            except Exception:
+                return
+        ann.xy = (hit["x_data"], hit["y_data"])
+        ann.set_text(self._probe_text_for_hit(hit))
+        ann.set_visible(True)
+        self.canvas.draw_idle()
+
+    def _set_selected_plot_point(self, hit: dict | None) -> None:
+        marker = self._plot_selected_marker
+        if hit is None:
+            if marker is not None:
+                try:
+                    marker.remove()
+                except Exception:
+                    pass
+                self._plot_selected_marker = None
+                self.canvas.draw_idle()
+            return
+        if marker is None or getattr(marker, "axes", None) != self.ax:
+            try:
+                marker = self.ax.scatter(
+                    [hit["x_data"]],
+                    [hit["y_data"]],
+                    s=80,
+                    facecolors="none",
+                    edgecolors="#111111",
+                    linewidths=1.3,
+                    zorder=19,
+                )
+                self._plot_selected_marker = marker
+            except Exception:
+                return
+        else:
+            try:
+                marker.set_offsets(np.array([[hit["x_data"], hit["y_data"]]], dtype=float))
+            except Exception:
+                try:
+                    marker.remove()
+                except Exception:
+                    pass
+                self._plot_selected_marker = None
+                return
         self.canvas.draw_idle()
 
     def _warn_fixed_range_no_data(self, values, fixed_range, context: str) -> None:
@@ -1801,9 +2037,11 @@ class DashboardDataPlotter(tk.Tk):
     def _on_plot_motion(self, event):
         drag = self._annotation_drag_state
         if not isinstance(drag, dict):
+            self._update_plot_hover_tooltip(event)
             return
         artist = drag.get("artist")
         if artist is None:
+            self._update_plot_hover_tooltip(event)
             return
         ex = getattr(event, "x", None)
         ey = getattr(event, "y", None)
@@ -1951,6 +2189,12 @@ class DashboardDataPlotter(tk.Tk):
             self._start_annotation_drag(existing_index, event)
             return
         if not self.annotation_mode_var.get():
+            hit = self._hit_test_plot_point(event)
+            self._set_selected_plot_point(hit)
+            if hit is not None:
+                self.status.set(
+                    f"Selected {hit.get('label') or 'point'} (x={self._format_probe_value(hit.get('x_display'))}, y={self._format_probe_value(hit.get('y_display'))})"
+                )
             return
         if event.xdata is None or event.ydata is None:
             return
@@ -6072,6 +6316,7 @@ class DashboardDataPlotter(tk.Tk):
             return
 
         self._reset_annotations(redraw=False)
+        self._reset_plot_hover_state(redraw=False)
         use_plotly = self.use_plotly_var.get()
         use_plotly_live = use_plotly and not self._restoring_history
         if use_plotly and self.annotation_mode_var.get():
@@ -6211,7 +6456,7 @@ class DashboardDataPlotter(tk.Tk):
             for trace in data.traces:
                 color = color_map.get(trace.source_id, "#1f77b4")
                 marker = "o"
-                self.ax.plot(
+                line, = self.ax.plot(
                     trace.x,
                     trace.y,
                     marker=marker,
@@ -6220,6 +6465,13 @@ class DashboardDataPlotter(tk.Tk):
                     label=trace.label,
                     color=color,
                     alpha=line_alpha,
+                )
+                self._register_line_hover_trace(
+                    line,
+                    label=trace.label,
+                    source_id=trace.source_id,
+                    x_display=trace.x,
+                    y_values=trace.y,
                 )
                 range_values.append(trace.y)
                 plotted += 1
@@ -6342,6 +6594,7 @@ class DashboardDataPlotter(tk.Tk):
             bar_colors = [color_map.get(self.state.display_to_id.get(
                 label, ""), "#1f77b4") for label in data.labels]
             bars = self.ax.bar(x, data.values, color=bar_colors)
+            self._register_bar_hover_targets(bars, data.labels, data.values)
             self.ax.set_xticks(x)
             tick_font_size, bottom_margin = self._bar_label_layout(data.labels)
             self.ax.set_xticklabels(
@@ -6475,8 +6728,15 @@ class DashboardDataPlotter(tk.Tk):
             range_values = []
             for trace in data.traces:
                 color = color_map.get(trace.source_id, "#1f77b4")
-                self.ax.plot(trace.x, trace.y, marker="o",
-                             markersize=3, linewidth=1.5, label=trace.label, color=color)
+                line, = self.ax.plot(trace.x, trace.y, marker="o",
+                                     markersize=3, linewidth=1.5, label=trace.label, color=color)
+                self._register_line_hover_trace(
+                    line,
+                    label=trace.label,
+                    source_id=trace.source_id,
+                    x_display=trace.x,
+                    y_values=trace.y,
+                )
                 range_values.append(trace.y)
                 plotted += 1
             self._warn_fixed_range_no_data(
@@ -6609,8 +6869,15 @@ class DashboardDataPlotter(tk.Tk):
             color = baseline_color if trace.is_baseline else color_map.get(
                 trace.source_id, "#1f77b4")
             theta = np.deg2rad(trace.x)
-            self.ax.plot(theta, trace.y, marker="o",
-                         markersize=3, linewidth=1.5, label=trace.label, color=color)
+            line, = self.ax.plot(theta, trace.y, marker="o",
+                                 markersize=3, linewidth=1.5, label=trace.label, color=color)
+            self._register_line_hover_trace(
+                line,
+                label=trace.label,
+                source_id=trace.source_id,
+                x_display=trace.x,
+                y_values=trace.y,
+            )
             if not trace.is_baseline:
                 plotted += 1
         if data.compare:

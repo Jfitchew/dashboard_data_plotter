@@ -11,6 +11,14 @@ visualisations across multiple datasets.
 The project is intentionally designed to be **Codex‑friendly**: modular, explicit, rule‑driven,
 and resistant to accidental semantic breakage.
 
+## Mission statement
+
+Dashboard Data Plotter exists to help practitioners turn **any cycling-relevant dataset** into clear,
+actionable insight: load diverse test data, explore it through meaningful visualisations, quantify the
+impact of interventions, and build toward an intelligent workflow where the app learns from user
+interaction to progressively automate analysis and generate high-quality reports.
+
+
 ---
 
 ## Core capabilities

@@ -1,6 +1,8 @@
 # Change Log
 
 3.29 - New Build Release
+  - 3.29.121 - 2026-02-24 - Updated `AGENTS.md` to instruct Codex to include 1-2 concise mission-aligned or cycling-analytics best-practice follow-on improvement suggestions in coding-task final responses.
+  - 3.29.120 - 2026-02-24 - Refreshed `AGENTS.md` for current project architecture (entrypoints, `data/`, reporting/export modules, rich HTML editor), added serialization/reporting invariants and UI/core boundary rules, and clarified pragmatic validation expectations (PyInstaller build checks for release-impact changes).
   - 3.29.119 - 2026-02-24 - Refreshed `GUIDE.md` high-level workflow documentation to match current app behavior (multi-baseline comparison, Save Data export, richer report content flow, annotation formatting/dragging, and report metadata controls).
   - 3.29.118 - 2026-02-24 - Added drag-to-move support for existing plot annotations (click-and-drag repositions the label/arrow; simple click still opens the annotation edit dialog).
   - 3.29.117 - 2026-02-24 - Fixed annotation default format application: corrected default font size to `14` and reset in-memory annotation defaults on project reset/new project so stale prior formatting no longer carries over unintentionally.

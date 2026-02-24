@@ -1,6 +1,14 @@
 # Change Log
 
 3.29 - New Build Release
+  - 3.29.119 - 2026-02-24 - Refreshed `GUIDE.md` high-level workflow documentation to match current app behavior (multi-baseline comparison, Save Data export, richer report content flow, annotation formatting/dragging, and report metadata controls).
+  - 3.29.118 - 2026-02-24 - Added drag-to-move support for existing plot annotations (click-and-drag repositions the label/arrow; simple click still opens the annotation edit dialog).
+  - 3.29.117 - 2026-02-24 - Fixed annotation default format application: corrected default font size to `14` and reset in-memory annotation defaults on project reset/new project so stale prior formatting no longer carries over unintentionally.
+  - 3.29.116 - 2026-02-24 - When loading a project with saved plot history, automatically restore and display the last history plot entry instead of leaving the view unrendered.
+  - 3.29.115 - 2026-02-24 - Added `Format...` to annotation edit (click existing annotation) to update that annotation's font/arrow styling and offsets, and changed default annotation format to size `14`, blue text/arrow, and offsets `x=20`, `y=40`.
+  - 3.29.114 - 2026-02-24 - Improved startup window placement to clamp size to the current screen and open near the top-center so the app no longer starts off the bottom of shorter displays.
+  - 3.29.113 - 2026-02-24 - Renamed the Reports button `Add text block...` to `Add content` and updated its tooltip/README wording to reflect richer content support.
+  - 3.29.112 - 2026-02-24 - Narrowed project unsaved-change prompts to dataset add/remove/rename/reorder and plot history add/remove/clear only; `Show` toggles, plot setting edits without creating a plot, and report-only changes now avoid project save prompts (report prompts still track report edits).
   - 3.29.111 - 2026-02-24 - Updated `scripts/build_exe.bat` to exclude unused optional `pywebview` backends and Qt bindings from PyInstaller builds, reducing packaged EXE size growth after the Windows rich text editor feature.
   - 3.29.110 - 2026-02-24 - Fixed packaged EXE rich report text editor launch so `Add text block...` opens the editor directly instead of first spawning a second main app instance.
   - 3.29.109 - 2026-02-23 - Fixed raw time-series outlier `X` overlays in comparison mode to use the selected baseline group average (not just the first baseline dataset), removing the vertical offset from the actual outlier points; also removed unused radar outlier offset overlay handling.

@@ -162,6 +162,7 @@ class DashboardDataPlotter(tk.Tk):
         self._project_dirty = False
         self._suspend_dirty = False
         self._update_title_bar()
+        self._startup_window_size = (1500, 876)
         self.geometry("1500x876")
         self._init_styles()
 
@@ -230,16 +231,38 @@ class DashboardDataPlotter(tk.Tk):
         self._annotations = []
         self._annotation_artists = []
         self._annotation_format = self._default_annotation_format()
+        self._annotation_drag_state = None
         self._load_annotation_format_from_project_options()
 
         self._init_styles()
         self._build_ui()
         self._build_plot()
+        self._apply_startup_window_geometry()
 
         self._set_plot_type_controls_state()
         self._set_compare_controls_state()
         self._update_outlier_show_state()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _apply_startup_window_geometry(self):
+        # Clamp the initial window to the current screen and place it near the
+        # top-center so the bottom edge stays visible on shorter displays.
+        try:
+            self.update_idletasks()
+            screen_w = max(1, int(self.winfo_screenwidth()))
+            screen_h = max(1, int(self.winfo_screenheight()))
+            default_w, default_h = self._startup_window_size
+            width = min(default_w, max(900, screen_w - 40))
+            height = min(default_h, max(650, screen_h - 100))
+            width = min(width, screen_w)
+            height = min(height, screen_h)
+            x = max(0, (screen_w - width) // 2)
+            y = max(0, min(24, screen_h - height))
+            self.geometry(f"{width}x{height}+{x}+{y}")
+        except Exception:
+            # Fall back to Tk/window-manager default placement if geometry
+            # probing is unavailable on the current platform.
+            pass
 
     def _init_styles(self):
         try:
@@ -967,7 +990,7 @@ class DashboardDataPlotter(tk.Tk):
         report_btns2 = ttk.Frame(left)
         report_btns2.grid(row=20, column=0, sticky="ew", pady=(6, 0))
         self.btn_add_text_block = ttk.Button(
-            report_btns2, text="Add text block...", command=self.add_report_text_block, width=14)
+            report_btns2, text="Add content", command=self.add_report_text_block, width=14)
         self.btn_add_text_block.grid(row=0, column=0, padx=(6, 0))
         self.btn_add_snapshot = ttk.Button(
             report_btns2, text="Add plot snapshot", command=self.add_report_snapshot, width=17)
@@ -1059,7 +1082,6 @@ class DashboardDataPlotter(tk.Tk):
             outlier_threshold=outlier_threshold,
             outlier_method=outlier_method,
         )
-        self._mark_dirty()
 
     def _datasets_from_json_obj(self, obj):
         out = []
@@ -1198,6 +1220,8 @@ class DashboardDataPlotter(tk.Tk):
         self.canvas = FigureCanvasTkAgg(self.fig, master=right)
         self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
         self.canvas.mpl_connect("button_press_event", self._on_plot_click)
+        self.canvas.mpl_connect("motion_notify_event", self._on_plot_motion)
+        self.canvas.mpl_connect("button_release_event", self._on_plot_release)
 
         toolbar = NavigationToolbar2Tk(self.canvas, right, pack_toolbar=False)
         toolbar.update()
@@ -1293,7 +1317,7 @@ class DashboardDataPlotter(tk.Tk):
             (self.btn_add_snapshot,
              "Add the current plot (with annotations) to the report."),
             (self.btn_add_text_block,
-             "Add a text-only content block to the report."),
+             "Add report content (text, rich text/HTML, images) not tied to a plot snapshot."),
             (self.btn_manage_report,
              "Edit, remove, and reorder report snapshots and text blocks."),
             (self.chk_annotate, "Enable click-to-add text annotations on the plot."),
@@ -1354,13 +1378,13 @@ class DashboardDataPlotter(tk.Tk):
     def _default_annotation_format(self) -> dict[str, object]:
         return {
             "font_family": "Segoe UI",
-            "font_size": 9,
+            "font_size": 12,
             "bold": False,
             "italic": False,
-            "text_color": "#111111",
-            "arrow_color": "#333333",
-            "offset_x": 8,
-            "offset_y": 8,
+            "text_color": "blue",
+            "arrow_color": "blue",
+            "offset_x": 20,
+            "offset_y": 40,
         }
 
     def _is_valid_annotation_color(self, value: str) -> bool:
@@ -1418,7 +1442,6 @@ class DashboardDataPlotter(tk.Tk):
             self._report_dirty = True
         self.state.analysis_settings.report_options["annotation_format"] = json.dumps(
             payload)
-        self._mark_dirty()
 
     def _load_annotation_format_from_project_options(self) -> None:
         raw = self.state.analysis_settings.report_options.get(
@@ -1442,10 +1465,18 @@ class DashboardDataPlotter(tk.Tk):
         self.state.analysis_settings.report_options["annotation_format"] = json.dumps(
             payload)
 
-    def configure_annotation_format(self) -> None:
-        initial = self._annotation_format_payload()
+    def _prompt_annotation_format_dialog(
+        self,
+        initial: dict[str, object] | None = None,
+        *,
+        title: str = "Annotation format",
+    ) -> dict[str, object] | None:
+        initial = self._normalize_annotation_format(
+            initial if isinstance(
+                initial, dict) else self._annotation_format_payload()
+        )
         dialog = tk.Toplevel(self)
-        dialog.title("Annotation format")
+        dialog.title(title)
         dialog.transient(self)
         dialog.grab_set()
         dialog.geometry("430x360")
@@ -1544,7 +1575,7 @@ class DashboardDataPlotter(tk.Tk):
         self.wait_window(dialog)
 
         if not result["ok"]:
-            return
+            return None
 
         updated = {
             "font_family": font_family_var.get().strip() or str(initial.get("font_family") or "Segoe UI"),
@@ -1556,7 +1587,13 @@ class DashboardDataPlotter(tk.Tk):
             "offset_x": offset_x_var.get().strip(),
             "offset_y": offset_y_var.get().strip(),
         }
-        self._annotation_format = self._normalize_annotation_format(updated)
+        return self._normalize_annotation_format(updated)
+
+    def configure_annotation_format(self) -> None:
+        updated = self._prompt_annotation_format_dialog()
+        if not updated:
+            return
+        self._annotation_format = dict(updated)
         self._remember_annotation_format()
         self.status.set("Updated default annotation format.")
 
@@ -1577,6 +1614,7 @@ class DashboardDataPlotter(tk.Tk):
             self.status.set("Annotation mode off.")
 
     def _reset_annotations(self, redraw: bool = True) -> None:
+        self._annotation_drag_state = None
         for artist in list(self._annotation_artists):
             try:
                 artist.remove()
@@ -1652,12 +1690,16 @@ class DashboardDataPlotter(tk.Tk):
         text = result.get("text")
         return text if text else None
 
-    def _prompt_annotation_edit(self, initial_text: str) -> tuple[str, str | None]:
+    def _prompt_annotation_edit(
+        self,
+        initial_text: str,
+        on_format=None,
+    ) -> tuple[str, str | None]:
         dialog = tk.Toplevel(self)
         dialog.title("Edit annotation")
         dialog.transient(self)
         dialog.grab_set()
-        dialog.geometry("420x240")
+        dialog.geometry("420x280")
         self._center_dialog(dialog)
 
         container = ttk.Frame(dialog, padding=10)
@@ -1668,6 +1710,14 @@ class DashboardDataPlotter(tk.Tk):
         text_widget.pack(fill="both", expand=True, pady=(2, 10))
         if initial_text:
             text_widget.insert("1.0", initial_text)
+
+        if callable(on_format):
+            hint = ttk.Label(
+                container,
+                text="Format... updates the selected annotation's font/arrow style.",
+                foreground="#555",
+            )
+            hint.pack(anchor="w")
 
         btns = ttk.Frame(container)
         btns.pack(fill="x", pady=(10, 0))
@@ -1685,10 +1735,19 @@ class DashboardDataPlotter(tk.Tk):
         def _cancel():
             dialog.destroy()
 
+        def _format():
+            try:
+                on_format()
+            except Exception:
+                pass
+
         ttk.Button(btns, text="Cancel", command=_cancel).pack(side="right")
         ttk.Button(btns, text="Update", command=_update).pack(
             side="right", padx=(0, 6))
         ttk.Button(btns, text="Delete", command=_delete).pack(side="left")
+        if callable(on_format):
+            ttk.Button(btns, text="Format...", command=_format).pack(
+                side="left", padx=(6, 0))
 
         dialog.bind("<Escape>", lambda _e: _cancel(), add=True)
         dialog.protocol("WM_DELETE_WINDOW", _cancel)
@@ -1719,6 +1778,87 @@ class DashboardDataPlotter(tk.Tk):
             self._annotations.pop(index)
         self.canvas.draw_idle()
 
+    def _start_annotation_drag(self, index: int, event) -> None:
+        if index < 0 or index >= len(self._annotation_artists):
+            return
+        artist = self._annotation_artists[index]
+        try:
+            start_offset = artist.get_position()
+        except Exception:
+            start_offset = (20, 40)
+        self._annotation_drag_state = {
+            "index": index,
+            "artist": artist,
+            "press_x": float(getattr(event, "x", 0.0) or 0.0),
+            "press_y": float(getattr(event, "y", 0.0) or 0.0),
+            "start_offset": (float(start_offset[0]), float(start_offset[1])),
+            "dragged": False,
+        }
+
+    def _annotation_drag_threshold_px(self) -> float:
+        return 4.0
+
+    def _on_plot_motion(self, event):
+        drag = self._annotation_drag_state
+        if not isinstance(drag, dict):
+            return
+        artist = drag.get("artist")
+        if artist is None:
+            return
+        ex = getattr(event, "x", None)
+        ey = getattr(event, "y", None)
+        if ex is None or ey is None:
+            return
+        dx_px = float(ex) - float(drag.get("press_x", 0.0))
+        dy_px = float(ey) - float(drag.get("press_y", 0.0))
+        if (not drag.get("dragged")) and (
+            (dx_px * dx_px + dy_px * dy_px) ** 0.5 < self._annotation_drag_threshold_px()
+        ):
+            return
+        drag["dragged"] = True
+        dpi = float(getattr(self.fig, "dpi", 100) or 100.0)
+        scale = 72.0 / dpi
+        start_x, start_y = drag.get("start_offset", (20.0, 40.0))
+        new_x = start_x + (dx_px * scale)
+        new_y = start_y + (dy_px * scale)
+        try:
+            artist.set_position((new_x, new_y))
+        except Exception:
+            return
+        self.canvas.draw_idle()
+
+    def _on_plot_release(self, event):
+        drag = self._annotation_drag_state
+        self._annotation_drag_state = None
+        if not isinstance(drag, dict):
+            return
+        index = int(drag.get("index", -1))
+        if index < 0 or index >= len(self._annotation_artists):
+            return
+        if not drag.get("dragged"):
+            self._edit_annotation_at(index)
+            return
+        artist = self._annotation_artists[index]
+        try:
+            offset_x, offset_y = artist.get_position()
+        except Exception:
+            return
+        fmt = self._annotation_format_payload()
+        if index < len(self._annotations) and isinstance(self._annotations[index], dict):
+            fmt = self._normalize_annotation_format(self._annotations[index].get("format", {}))
+            self._annotations[index]["format"] = dict(fmt)
+        fmt["offset_x"] = int(round(float(offset_x)))
+        fmt["offset_y"] = int(round(float(offset_y)))
+        fmt = self._normalize_annotation_format(fmt)
+        if index < len(self._annotations) and isinstance(self._annotations[index], dict):
+            self._annotations[index]["format"] = dict(fmt)
+        try:
+            artist.set_position((int(fmt["offset_x"]), int(fmt["offset_y"])))
+        except Exception:
+            pass
+        self.canvas.draw_idle()
+        self.status.set("Moved annotation.")
+
     def _edit_annotation_at(self, index: int) -> None:
         if index < 0 or index >= len(self._annotation_artists):
             return
@@ -1730,7 +1870,60 @@ class DashboardDataPlotter(tk.Tk):
                 current_text = str(self._annotation_artists[index].get_text())
             except Exception:
                 current_text = ""
-        action, updated_text = self._prompt_annotation_edit(current_text)
+
+        def _annotation_format_for_index() -> dict[str, object]:
+            if index < len(self._annotations):
+                item = self._annotations[index]
+                if isinstance(item, dict):
+                    return self._normalize_annotation_format(item.get("format", {}))
+            return self._annotation_format_payload()
+
+        def _apply_annotation_artist_format(artist, fmt: dict[str, object]) -> None:
+            artist.set_fontsize(int(fmt.get("font_size", 14)))
+            artist.set_color(str(fmt.get("text_color") or "blue"))
+            artist.set_fontname(str(fmt.get("font_family") or "Segoe UI"))
+            artist.set_fontweight(self._annotation_font_weight(fmt))
+            artist.set_fontstyle(self._annotation_font_style(fmt))
+            try:
+                artist.set_position(
+                    (int(fmt.get("offset_x", 20)), int(fmt.get("offset_y", 40)))
+                )
+            except Exception:
+                pass
+            arrow_patch = getattr(artist, "arrow_patch", None)
+            if arrow_patch is not None:
+                try:
+                    arrow_patch.set_color(
+                        str(fmt.get("arrow_color") or "blue"))
+                except Exception:
+                    try:
+                        arrow_patch.set_edgecolor(
+                            str(fmt.get("arrow_color") or "blue"))
+                    except Exception:
+                        pass
+
+        def _format_selected_annotation() -> None:
+            current_fmt = _annotation_format_for_index()
+            updated_fmt = self._prompt_annotation_format_dialog(
+                current_fmt,
+                title="Annotation format (selected annotation)",
+            )
+            if not updated_fmt:
+                return
+            try:
+                _apply_annotation_artist_format(
+                    self._annotation_artists[index], updated_fmt)
+            except Exception:
+                return
+            if index < len(self._annotations) and isinstance(self._annotations[index], dict):
+                self._annotations[index]["format"] = dict(updated_fmt)
+            self.canvas.draw_idle()
+            self.status.set("Updated selected annotation format.")
+
+        action, updated_text = self._prompt_annotation_edit(
+            current_text,
+            on_format=_format_selected_annotation,
+        )
         if action == "delete":
             self._remove_annotation_at(index)
             return
@@ -1749,11 +1942,13 @@ class DashboardDataPlotter(tk.Tk):
     def _on_plot_click(self, event):
         if self.use_plotly_var.get():
             return
+        if getattr(event, "button", None) not in (1, None):
+            return
         if event.inaxes != self.ax:
             return
         existing_index = self._find_annotation_index(event)
         if existing_index is not None:
-            self._edit_annotation_at(existing_index)
+            self._start_annotation_drag(existing_index, event)
             return
         if not self.annotation_mode_var.get():
             return
@@ -2184,7 +2379,8 @@ class DashboardDataPlotter(tk.Tk):
         title_entry.pack(fill="x", pady=(2, 10))
 
         fmt_var = tk.StringVar(
-            value="html" if str(initial_format).strip().lower() == "html" else "text"
+            value="html" if str(initial_format).strip(
+            ).lower() == "html" else "text"
         )
         fmt_row = ttk.Frame(container)
         fmt_row.pack(fill="x", pady=(0, 6))
@@ -2328,11 +2524,13 @@ class DashboardDataPlotter(tk.Tk):
             return ("", "", "__cancelled__")
         raw_title = str(result.get("title", "")).strip()
         raw_html = str(result.get("html", "") or "")
-        normalized_html = self._normalize_report_rich_html_for_storage(raw_html)
+        normalized_html = self._normalize_report_rich_html_for_storage(
+            raw_html)
         return raw_title, normalized_html, "html"
 
     def _run_windows_rich_html_editor(self, payload: dict[str, str]) -> dict | None:
-        src_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        src_root = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "..", ".."))
         temp_dir = tempfile.mkdtemp(prefix="ddp_rich_editor_")
         in_path = os.path.join(temp_dir, "input.json")
         out_path = os.path.join(temp_dir, "output.json")
@@ -2352,7 +2550,8 @@ class DashboardDataPlotter(tk.Tk):
                 ]
             else:
                 py_path = env.get("PYTHONPATH", "")
-                env["PYTHONPATH"] = src_root + (os.pathsep + py_path if py_path else "")
+                env["PYTHONPATH"] = src_root + \
+                    (os.pathsep + py_path if py_path else "")
                 cmd = [
                     sys.executable,
                     "-m",
@@ -2393,7 +2592,8 @@ class DashboardDataPlotter(tk.Tk):
                 return result
             return {"cancelled": True}
         except Exception as exc:
-            messagebox.showerror("Rich editor", f"Failed to open rich editor:\n{exc}")
+            messagebox.showerror(
+                "Rich editor", f"Failed to open rich editor:\n{exc}")
             return None
         finally:
             try:
@@ -2431,7 +2631,8 @@ class DashboardDataPlotter(tk.Tk):
         return re.sub(r"src=(['\"])([^'\"]+)\1", _replace_data_uri_img, html_text, flags=re.IGNORECASE)
 
     def _save_data_uri_image_report_asset(self, data_uri: str) -> str:
-        match = re.match(r"^data:image/([a-zA-Z0-9.+-]+);base64,(.+)$", data_uri, flags=re.IGNORECASE | re.DOTALL)
+        match = re.match(
+            r"^data:image/([a-zA-Z0-9.+-]+);base64,(.+)$", data_uri, flags=re.IGNORECASE | re.DOTALL)
         if not match:
             return ""
         subtype = (match.group(1) or "png").lower()
@@ -2448,7 +2649,8 @@ class DashboardDataPlotter(tk.Tk):
             blob = base64.b64decode(b64, validate=False)
         except Exception:
             return ""
-        rel_name = os.path.join("rich", f"richimg_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}{ext}")
+        rel_name = os.path.join(
+            "rich", f"richimg_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}{ext}")
         out_path = os.path.join(self._current_report_assets_dir(), rel_name)
         try:
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -2462,7 +2664,8 @@ class DashboardDataPlotter(tk.Tk):
         if os.name != "nt":
             return ""
         try:
-            fmt_id = ctypes.windll.user32.RegisterClipboardFormatW("HTML Format")
+            fmt_id = ctypes.windll.user32.RegisterClipboardFormatW(
+                "HTML Format")
         except Exception:
             return ""
         if not fmt_id:
@@ -3152,7 +3355,8 @@ class DashboardDataPlotter(tk.Tk):
             if not rel:
                 return match.group(0)
             if embed_assets and asset_root:
-                data_uri = self._load_asset_data_uri(os.path.join(asset_root, rel))
+                data_uri = self._load_asset_data_uri(
+                    os.path.join(asset_root, rel))
                 if data_uri:
                     return f'src={quote}{data_uri}{quote}'
             if asset_prefix:
@@ -3165,7 +3369,8 @@ class DashboardDataPlotter(tk.Tk):
     def _iter_text_block_asset_relpaths(self, report: dict) -> list[str]:
         out: list[str] = []
         seen: set[str] = set()
-        snapshots = report.get("snapshots", []) if isinstance(report, dict) else []
+        snapshots = report.get("snapshots", []) if isinstance(
+            report, dict) else []
         if not isinstance(snapshots, list):
             return out
         for item in snapshots:
@@ -3963,7 +4168,8 @@ class DashboardDataPlotter(tk.Tk):
                         theta=x,
                         mode="markers",
                         name=f"{item['label']} outliers",
-                        marker=dict(color=color, size=12, symbol="x", line=dict(color=color, width=2)),
+                        marker=dict(color=color, size=12, symbol="x",
+                                    line=dict(color=color, width=2)),
                         showlegend=False,
                     )
                 )
@@ -3974,7 +4180,8 @@ class DashboardDataPlotter(tk.Tk):
                         y=y,
                         mode="markers",
                         name=f"{item['label']} outliers",
-                        marker=dict(color=color, size=12, symbol="x", line=dict(color=color, width=2)),
+                        marker=dict(color=color, size=12, symbol="x",
+                                    line=dict(color=color, width=2)),
                         showlegend=False,
                     )
                 )
@@ -4251,6 +4458,7 @@ class DashboardDataPlotter(tk.Tk):
         self._history.clear()
         self._history_index = -1
         self._update_history_buttons()
+        self._mark_dirty()
 
     # ---------------- Tree / list actions ----------------
     def _on_tree_click(self, event):
@@ -4284,7 +4492,6 @@ class DashboardDataPlotter(tk.Tk):
         if self.files_tree.exists(source_id):
             name = self.files_tree.item(source_id, "values")[1]
             self.files_tree.item(source_id, values=(show_txt, name))
-        self._mark_dirty()
 
     def toggle_all_show(self):
         items = list(ordered_source_ids(self.state))
@@ -4299,7 +4506,6 @@ class DashboardDataPlotter(tk.Tk):
             if self.files_tree.exists(iid):
                 name = self.files_tree.item(iid, "values")[1]
                 self.files_tree.item(iid, values=(show_txt, name))
-        self._mark_dirty()
 
     def rename_selected(self):
         sel = list(self.files_tree.selection())
@@ -4988,6 +5194,7 @@ class DashboardDataPlotter(tk.Tk):
         for iid in self.files_tree.get_children(""):
             self.files_tree.delete(iid)
         self.state.clear()
+        self._annotation_format = self._default_annotation_format()
         self._history.clear()
         self._history_index = -1
         self._update_history_buttons()
@@ -5075,6 +5282,15 @@ class DashboardDataPlotter(tk.Tk):
             self._refresh_angle_choices()
             self.refresh_baseline_choices()
             self._auto_default_metric()
+            if self._history:
+                self._history_index = len(self._history) - 1
+                self._update_history_buttons()
+                self._restoring_history = True
+                try:
+                    self._apply_snapshot(self._history[self._history_index])
+                    self.plot()
+                finally:
+                    self._restoring_history = False
 
             self.project_title = str(
                 settings.get("project_title") or "").strip()

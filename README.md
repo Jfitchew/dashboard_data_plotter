@@ -142,7 +142,7 @@ Report workflow:
 2. (Optional) Click **Format…** to set annotation style defaults (font, bold/italic, colours, and caption offset from the selected point).
 3. (Optional) Toggle **Annotate** and click the plot to add text annotations using the current format.
 4. Click **Add snapshot...** to include the plot and comments in the report.
-5. (Optional) Click **Add text block...** for narrative sections that are not tied to a plot. On Windows, this opens a rich content editor (WebView-based) where you can paste from Word/web pages using normal right-click **Paste** / `Ctrl+V`, review/edit rendered content (including images), and then save it back into the report as an HTML-rich block.
+5. (Optional) Click **Add content** for narrative sections that are not tied to a plot. On Windows, this opens a rich content editor (WebView-based) where you can paste from Word/web pages using normal right-click **Paste** / `Ctrl+V`, review/edit rendered content (including images), and then save it back into the report as an HTML-rich block.
 6. Use **Manage content...** to edit/remove/reorder snapshots and text blocks.
 7. (Optional) Tick **Incl meta** to include metadata in preview/export (data sources, plot settings, dates, and auto plot titles). Leave it unticked to hide them.
 8. Use **Export HTML...** or **Export PDF...** to share with clients.

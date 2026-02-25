@@ -255,6 +255,33 @@ streamlit run streamlit_app.py
 
 ---
 
+## Dash UI (migration preview, optional)
+
+A new Dash-based web adapter shell is available as a Phase 1 migration scaffold with:
+- Professional responsive shell layout and theming
+- `dash-bootstrap-components` integration with the `Cyborg` Bootstrap theme (default)
+- Large section navigation buttons (`Project / Data`, `Plot`, `Reports`)
+- Windows-aligned grouped panel placeholders ready for phased feature porting
+- Functional `Project / Data` workflows (Phase 2/3): project JSON auto-load on upload, dataset file auto-add on upload, merged `Data sources` file/paste JSON panel, `Save Data`, and dataset rename/remove/reorder controls
+- Functional `Plot` workflows (Phase 4): compact multi-column grouped controls with a larger plot workspace, dataset visibility toggles, Plotly rendering via shared core plotting logic, baseline comparison, and plot history navigation
+- Reports foundation (Phase 5): basic report JSON new/save plus auto-load on upload and editable raw report JSON panel (rich editing/export parity still pending)
+
+Install optional dependencies first (if not already installed):
+
+```bat
+pip install dash dash-bootstrap-components
+```
+
+`requirements.txt` now includes these packages as well, so a normal project install will also pull in Dash support.
+
+Run the Dash shell:
+
+```bat
+python dash_app.py
+```
+
+---
+
 ## Building a Windows executable
 
 ```bat

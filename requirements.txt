@@ -2,6 +2,8 @@ numpy>=1.24
 pandas>=2.0
 matplotlib>=3.7
 plotly>=5.18
+dash>=2.17
+dash-bootstrap-components>=1.6
 streamlit>=1.30
 reportlab>=4.0
 pywebview>=5.0; platform_system=="Windows"

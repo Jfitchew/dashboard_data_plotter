@@ -1,6 +1,10 @@
 # Change Log
 
 3.29 - New Build Release
+  - 3.43.3 - 2026-02-25 - Added Windows-to-Dash startup handoff so launching the `Web app` from Tk preloads the current project datasets/settings and current report JSON into the web session (preserving dataset order, names, and `source_id` metadata) via a temporary startup payload file.
+  - 3.43.2 - 2026-02-25 - Added a Windows toolbar `Web app` button that launches the Dash web UI in a separate process (non-blocking for the Tk app), disables Dash debug/reloader for packaged launches, and auto-selects a free localhost port before opening the browser.
+  - 3.43.1 - 2026-02-25 - Tightened the Windows `Project / Data` dataset list column widths so the control stays near its previous width after adding details, left-aligned the `Dataset` column header, and right-aligned the `Source ID` column values/header so truncated IDs keep the most informative suffix visible.
+  - 3.29.165 - 2026-02-25 - Added more dataset detail columns to the Windows `Project / Data` dataset list (`#`, `Rows`, `Cols`, `Source ID`) for better parity with the web dataset grid, and hardened tree click/double-click column handling so rename behavior continues to target the dataset-name column after layout changes.
   - 3.29.164 - 2026-02-25 - Compressed Dash `Actions and history` into a minimal single-row toolbar (header removed, tighter padding/spacing) to maximize `Plot output` height while retaining history status and a compact `?` help icon.
   - 3.29.163 - 2026-02-25 - Corrected the Dash `Plot` desktop grid placement fix by attaching the `plot-controls` placement class to the actual `Plot controls` card (it had been mistakenly applied to an inactive placeholder card), so `Plot output` now sits below `Actions and history` in the right column.
   - 3.29.162 - 2026-02-25 - Fixed Dash `Plot` desktop panel placement by explicitly pinning the `Plot controls` card to the left column and the `Actions and history` / `Plot output` cards to the right column (with `Plot output` directly below `Actions and history`).

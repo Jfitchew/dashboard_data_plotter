@@ -78,6 +78,7 @@ import base64
 import html
 import shutil
 import uuid
+import socket
 from datetime import datetime
 import csv
 import re
@@ -245,6 +246,9 @@ class DashboardDataPlotter(tk.Tk):
         self._suspend_plot_dataset_listbox_event = False
         self._text_context_menu_target = None
         self._text_context_menu = None
+        self._web_app_proc = None
+        self._web_app_url = ""
+        self._web_app_handoff_path = ""
 
         self._init_styles()
         self._init_text_context_menu_support()
@@ -671,6 +675,185 @@ class DashboardDataPlotter(tk.Tk):
         dialog.bind("<Escape>", lambda _e: dialog.destroy(), add=True)
         dialog.focus_set()
 
+    def _pick_free_local_port(self, preferred: int = 8050) -> int:
+        for candidate in (preferred, 8051, 8052, 8060, 0):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                sock.bind(("127.0.0.1", int(candidate)))
+                return int(sock.getsockname()[1])
+            except OSError:
+                continue
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+        raise OSError("Unable to allocate a free localhost port.")
+
+    def _is_local_port_open(self, port: int) -> bool:
+        try:
+            with socket.create_connection(("127.0.0.1", int(port)), timeout=0.2):
+                return True
+        except OSError:
+            return False
+
+    def _launch_web_app(self) -> None:
+        try:
+            existing = self._web_app_proc
+            if existing is not None and existing.poll() is None and self._web_app_url:
+                webbrowser.open(self._web_app_url)
+                self.status.set(f"Opened existing web app: {self._web_app_url}")
+                return
+
+            port = self._pick_free_local_port(8050)
+            url = f"http://127.0.0.1:{port}"
+            src_root = os.path.abspath(os.path.join(
+                os.path.dirname(__file__), "..", ".."))
+            project_root = os.path.abspath(os.path.join(src_root, ".."))
+            env = dict(os.environ)
+            handoff_path = self._write_dash_startup_handoff_file()
+
+            if getattr(sys, "frozen", False):
+                cmd = [
+                    sys.executable,
+                    "--ddp-dash-web",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                    "--startup-session-file",
+                    handoff_path,
+                ]
+            else:
+                py_path = env.get("PYTHONPATH", "")
+                env["PYTHONPATH"] = src_root + (os.pathsep + py_path if py_path else "")
+                cmd = [
+                    sys.executable,
+                    "-m",
+                    "dashboard_data_plotter.ui.dash_app",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                    "--startup-session-file",
+                    handoff_path,
+                    "--no-debug",
+                    "--no-reloader",
+                ]
+
+            popen_kwargs = {
+                "cwd": project_root,
+                "env": env,
+            }
+            if os.name == "nt":
+                popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+            proc = subprocess.Popen(cmd, **popen_kwargs)
+            self._web_app_proc = proc
+            self._web_app_url = url
+            self._web_app_handoff_path = handoff_path
+            self.status.set(f"Starting web app on {url} ...")
+            self.after(250, lambda: self._finish_web_app_launch(proc, url, port, attempts=40))
+        except Exception as exc:
+            log_exception("tk._launch_web_app failed")
+            messagebox.showerror(
+                "Web app",
+                f"Failed to start web app:\n{type(exc).__name__}: {exc}",
+            )
+
+    def _finish_web_app_launch(self, proc, url: str, port: int, attempts: int = 40) -> None:
+        if self._web_app_proc is not proc:
+            return
+        if proc.poll() is not None:
+            self._web_app_proc = None
+            self._web_app_url = ""
+            self._cleanup_web_app_handoff_file()
+            messagebox.showerror(
+                "Web app",
+                "The web app process exited before startup completed.\n\n"
+                "Check that Dash dependencies are installed and try again.",
+            )
+            self.status.set("Web app failed to start.")
+            return
+        if self._is_local_port_open(port):
+            webbrowser.open(url)
+            self.status.set(f"Web app running: {url}")
+            self._cleanup_web_app_handoff_file()
+            return
+        if attempts <= 0:
+            webbrowser.open(url)
+            self.status.set(f"Web app may still be starting: {url}")
+            return
+        self.after(250, lambda: self._finish_web_app_launch(proc, url, port, attempts - 1))
+
+    def _dash_startup_handoff_payload(self) -> dict:
+        payload = {
+            "project_session": {
+                "project_payload": build_project_payload(self.state),
+                "dataset_counter": 0,
+                "paste_json": "",
+                "plot_ui": {},
+                "plot_history": [],
+                "plot_history_index": -1,
+                "plot_result_figure": None,
+                "plot_result_errors": [],
+                "plot_result_note": "",
+                "report_payload": None,
+                "report_paste_json": "",
+                "handoff_meta": {
+                    "from": "tk_app",
+                    "project_title": str(self.project_title or ""),
+                    "project_path": str(self.project_path or ""),
+                },
+            },
+            "ui_session": {
+                "section": "project_data",
+                "theme": "theme-lux",
+                "sidebar_collapsed": False,
+            },
+        }
+        if isinstance(self.report_state, dict):
+            try:
+                # JSON round-trip ensures the handoff is serializable and detached
+                # from mutable Tk report state objects.
+                payload["project_session"]["report_payload"] = json.loads(
+                    json.dumps(self.report_state)
+                )
+            except Exception:
+                log_exception("tk._dash_startup_handoff_payload report serialize failed")
+        return payload
+
+    def _write_dash_startup_handoff_file(self) -> str:
+        self._cleanup_web_app_handoff_file()
+        handoff = self._dash_startup_handoff_payload()
+        fd, path = tempfile.mkstemp(prefix="ddp_dash_startup_", suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(handoff, handle, ensure_ascii=False)
+        except Exception:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+            raise
+        self._web_app_handoff_path = path
+        return path
+
+    def _cleanup_web_app_handoff_file(self) -> None:
+        path = str(self._web_app_handoff_path or "").strip()
+        if not path:
+            return
+        self._web_app_handoff_path = ""
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except Exception:
+            pass
+
     def _init_text_context_menu_support(self) -> None:
         self._text_context_menu = tk.Menu(self, tearoff=0)
         self._text_context_menu.add_command(
@@ -801,6 +984,9 @@ class DashboardDataPlotter(tk.Tk):
         tabs_tools = ttk.Frame(left)
         tabs_tools.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         tabs_tools.columnconfigure(0, weight=1)
+        self.btn_web_app = ttk.Button(
+            tabs_tools, text="Web app", command=self._launch_web_app, width=10)
+        self.btn_web_app.grid(row=0, column=0, sticky="w")
         self.btn_guide = ttk.Button(
             tabs_tools, text="Guide", command=self._open_guide, width=10)
         self.btn_guide.grid(row=0, column=1, sticky="e")
@@ -879,19 +1065,26 @@ class DashboardDataPlotter(tk.Tk):
 
         self.files_tree = ttk.Treeview(
             tv_frame,
-            columns=("show", "name"),
-            displaycolumns=("name",),
+            columns=("show", "order", "name", "rows", "cols", "source_id"),
+            displaycolumns=("order", "name", "rows", "cols", "source_id"),
             show="headings",
             height=8,
             selectmode="extended",
         )
         self.files_tree.heading("show", text="Show",
                                 command=self.toggle_all_show)
+        self.files_tree.heading("order", text="#")
         self.files_tree.heading("name", text="Dataset",
-                                command=self.sort_by_dataset_name)
-        self.files_tree.column(
-            "show", width=50, anchor="center", stretch=False)
-        self.files_tree.column("name", width=392, anchor="w")
+                                anchor="w", command=self.sort_by_dataset_name)
+        self.files_tree.heading("rows", text="Rows")
+        self.files_tree.heading("cols", text="Cols")
+        self.files_tree.heading("source_id", text="Source ID", anchor="e")
+        self.files_tree.column("show", width=50, anchor="center", stretch=False)
+        self.files_tree.column("order", width=38, anchor="center", stretch=False)
+        self.files_tree.column("name", width=118, anchor="w", stretch=False)
+        self.files_tree.column("rows", width=56, anchor="e", stretch=False)
+        self.files_tree.column("cols", width=44, anchor="e", stretch=False)
+        self.files_tree.column("source_id", width=132, anchor="e", stretch=False)
 
         self.files_tree.grid(row=0, column=0, sticky="ew")
 
@@ -1316,12 +1509,16 @@ class DashboardDataPlotter(tk.Tk):
                 self.files_tree.delete(iid)
         for index, sid in enumerate(ordered_source_ids(self.state)):
             display = self.state.id_to_display.get(sid, sid)
+            df = self.state.loaded.get(sid)
+            row_count = int(len(df)) if df is not None else 0
+            col_count = int(len(df.columns)) if df is not None else 0
             show_txt = "\u2713" if self.state.show_flag.get(sid, True) else ""
+            values = (show_txt, index + 1, display, row_count, col_count, sid)
             if not self.files_tree.exists(sid):
                 self.files_tree.insert(
-                    "", "end", iid=sid, values=(show_txt, display))
+                    "", "end", iid=sid, values=values)
             else:
-                self.files_tree.item(sid, values=(show_txt, display))
+                self.files_tree.item(sid, values=values)
             self.files_tree.move(sid, "", index)
         self._sync_plot_datasets_tree_from_state()
 
@@ -5030,18 +5227,21 @@ class DashboardDataPlotter(tk.Tk):
 
     # ---------------- Tree / list actions ----------------
     def _on_tree_click(self, event):
-        display_cols = self.files_tree.cget("displaycolumns")
-        if isinstance(display_cols, str):
-            show_visible = "show" in display_cols
-        else:
-            show_visible = "show" in tuple(display_cols)
-        if not show_visible:
-            return
         region = self.files_tree.identify("region", event.x, event.y)
         if region != "cell":
             return
         col = self.files_tree.identify_column(event.x)
-        if col != "#1":
+        try:
+            col_index = int(str(col).lstrip("#")) - 1
+        except Exception:
+            return
+        display_cols = self.files_tree.cget("displaycolumns")
+        if isinstance(display_cols, str):
+            display_cols = tuple(c.strip() for c in display_cols.split() if c.strip())
+        else:
+            display_cols = tuple(display_cols)
+        col_key = display_cols[col_index] if 0 <= col_index < len(display_cols) else None
+        if col_key != "show":
             return
         row_id = self.files_tree.identify_row(event.y)
         if not row_id:
@@ -5054,7 +5254,17 @@ class DashboardDataPlotter(tk.Tk):
         if region != "cell":
             return
         col = self.files_tree.identify_column(event.x)
-        if col != "#2":
+        try:
+            col_index = int(str(col).lstrip("#")) - 1
+        except Exception:
+            return
+        display_cols = self.files_tree.cget("displaycolumns")
+        if isinstance(display_cols, str):
+            display_cols = tuple(c.strip() for c in display_cols.split() if c.strip())
+        else:
+            display_cols = tuple(display_cols)
+        col_key = display_cols[col_index] if 0 <= col_index < len(display_cols) else None
+        if col_key != "name":
             return
         row_id = self.files_tree.identify_row(event.y)
         if not row_id:

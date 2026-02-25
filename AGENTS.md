@@ -95,6 +95,7 @@ Small changes can silently break behavior. Agents must follow the rules below.
 - Add helpers instead of duplicating logic.
 - In final responses for coding tasks, offer 1-2 concise suggestions for follow-on code improvements or features that either move the project toward the mission-statement end goal (broader cycling-data insight, progressive automation, higher-quality reporting) or reflect best practice for cycling data analytics tools.
 - Update `CHANGELOG.md` with a brief summary for user-visible behavior changes and important tooling/process-document updates; remove entries if changes are rolled back.
+- Use `src/dashboard_data_plotter/version.py` `BUILD_VERSION` as the middle number in new changelog entry versions (`MAJOR.BUILD.xxx`), e.g. if `BUILD_VERSION = "43"` then new entries should be `3.43.xxx`.
 - Update `README.md` / `GUIDE.md` if user-facing behavior or workflow changes.
 - MAJOR version is manual (see `src/dashboard_data_plotter/version.py`); do not auto-bump it.
 - Packaged builds should be tagged in git as `MAJOR.BUILD` for changelog cutoffs.

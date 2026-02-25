@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import base64
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any
 
@@ -1393,8 +1395,16 @@ def _main_content_for_state(section_key: str, project_session: dict[str, Any] | 
         ],
     )
 
-
-def _root_layout() -> html.Div:
+def _root_layout(
+    initial_project_session: dict[str, Any] | None = None,
+    initial_ui_session: dict[str, Any] | None = None,
+) -> html.Div:
+    project_session = initial_project_session if isinstance(initial_project_session, dict) else _empty_project_session()
+    ui_session = (
+        initial_ui_session
+        if isinstance(initial_ui_session, dict)
+        else {"section": "project_data", "theme": "theme-lux", "sidebar_collapsed": False}
+    )
     return html.Div(
         id="app-shell",
         className="ddp-app-shell theme-lux",
@@ -1403,29 +1413,77 @@ def _root_layout() -> html.Div:
             dcc.Store(
                 id="ui-session",
                 storage_type="session",
-                data={"section": "project_data", "theme": "theme-lux", "sidebar_collapsed": False},
+                data=ui_session,
             ),
             # Project payloads can exceed browser Web Storage quotas; keep the large
             # per-page working state in memory and reserve session storage for small UI state.
-            dcc.Store(id="project-session", storage_type="memory", data=_empty_project_session()),
+            dcc.Store(id="project-session", storage_type="memory", data=project_session),
             _sidebar(),
-            html.Div(id="main-content-slot", children=_main_content_for_state("project_data", _empty_project_session())),
+            html.Div(id="main-content-slot", children=_main_content_for_state("project_data", project_session)),
         ],
     )
 
 
-def create_app() -> Dash:
+def _load_startup_handoff(startup_session_file: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    project_session = _empty_project_session()
+    ui_session: dict[str, Any] = {"section": "project_data", "theme": "theme-lux", "sidebar_collapsed": False}
+    path = str(startup_session_file or "").strip()
+    if not path:
+        return project_session, ui_session
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+        if not isinstance(raw, dict):
+            return project_session, ui_session
+
+        incoming_project_session = raw.get("project_session")
+        if isinstance(incoming_project_session, dict):
+            state, session = _state_from_session(incoming_project_session)
+            project_session = _session_from_state(state, session)
+            report_payload = incoming_project_session.get("report_payload")
+            if isinstance(report_payload, dict):
+                project_session["report_payload"] = report_payload
+            report_paste_json = incoming_project_session.get("report_paste_json")
+            if isinstance(report_paste_json, str):
+                project_session["report_paste_json"] = report_paste_json
+            handoff_meta = incoming_project_session.get("handoff_meta")
+            if isinstance(handoff_meta, dict):
+                project_session["handoff_meta"] = handoff_meta
+
+        incoming_ui_session = raw.get("ui_session")
+        if isinstance(incoming_ui_session, dict):
+            for key in ("section", "theme", "sidebar_collapsed"):
+                if key in incoming_ui_session:
+                    ui_session[key] = incoming_ui_session[key]
+        if ui_session.get("section") not in {"project_data", "plot", "reports"}:
+            ui_session["section"] = "project_data"
+        if ui_session.get("theme") not in DBC_THEME_URLS:
+            ui_session["theme"] = "theme-lux"
+        ui_session["sidebar_collapsed"] = bool(ui_session.get("sidebar_collapsed", False))
+    except Exception:
+        pass
+    finally:
+        try:
+            if path and os.path.isfile(path):
+                os.remove(path)
+        except Exception:
+            pass
+    return project_session, ui_session
+
+
+def create_app(*, startup_session_file: str | None = None) -> Dash:
     if dbc is None:
         raise RuntimeError(
             "Dash Phase 1 requires optional dependencies `dash` and `dash-bootstrap-components`."
         )
+    initial_project_session, initial_ui_session = _load_startup_handoff(startup_session_file)
     app = Dash(
         __name__,
         assets_folder=_dash_assets_dir(),
         suppress_callback_exceptions=True,
         title="Dashboard Data Plotter (Dash)",
     )
-    app.layout = _root_layout()
+    app.layout = _root_layout(initial_project_session, initial_ui_session)
     _register_callbacks(app)
     return app
 
@@ -1983,9 +2041,25 @@ def _register_callbacks(app: Dash) -> None:
 
 
 def main(**run_kwargs) -> None:
-    app = create_app()
+    startup_session_file = run_kwargs.pop("startup_session_file", None)
+    app = create_app(startup_session_file=startup_session_file)
     app.run(**run_kwargs)
 
 
 if __name__ == "__main__":
-    main(debug=True)
+    parser = argparse.ArgumentParser(description="Dashboard Data Plotter Dash UI")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8050)
+    parser.add_argument("--startup-session-file", default="")
+    parser.add_argument("--debug", dest="debug", action="store_true", default=False)
+    parser.add_argument("--no-debug", dest="debug", action="store_false")
+    parser.add_argument("--reloader", dest="use_reloader", action="store_true", default=False)
+    parser.add_argument("--no-reloader", dest="use_reloader", action="store_false")
+    args = parser.parse_args()
+    main(
+        host=args.host,
+        port=args.port,
+        startup_session_file=args.startup_session_file,
+        debug=args.debug,
+        use_reloader=args.use_reloader,
+    )

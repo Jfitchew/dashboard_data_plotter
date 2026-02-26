@@ -193,11 +193,15 @@ def build_dataset_data_payload(
         name = make_unique_name(display, existing)
         existing.add(name)
         df = state.loaded[sid]
-        payload[name] = {
+        entry = {
             "rideData": df_to_jsonable_records(df),
             "__source_id__": sid,
             "__display__": display,
         }
+        binned_df = state.binned.get(sid)
+        if binned_df is not None and not binned_df.empty:
+            entry["left_pedalstroke_avg"] = df_to_jsonable_records(binned_df)
+        payload[name] = entry
     return payload
 
 

@@ -93,6 +93,81 @@ def _apply_value_mode(values: np.ndarray, mode: str) -> np.ndarray:
     raise ValueError(f"Unknown value mode: {mode}")
 
 
+def _prepare_original_binned_angle_values(
+    df,
+    angle_col: str,
+    metric_col: str,
+    sentinels: list[float],
+    outlier_threshold: Optional[float],
+    outlier_method: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Use original dashboard 52-row bins directly (preserve row/index order)."""
+    if angle_col not in df.columns:
+        raise KeyError(f"Angle column '{angle_col}' not found.")
+    if metric_col not in df.columns:
+        raise KeyError(f"Metric column '{metric_col}' not found.")
+
+    convert_br = angle_col in ("leftPedalCrankAngle", "rightPedalCrankAngle")
+    ang_series = wrap_angle_deg(
+        sanitize_numeric(df[angle_col], sentinels),
+        convert_br_to_standard=convert_br,
+    )
+    val_series = sanitize_numeric(df[metric_col], sentinels)
+    val_series = apply_outlier_filter(
+        val_series,
+        threshold=outlier_threshold,
+        method=outlier_method,
+        angle_series=ang_series if normalize_outlier_method(outlier_method) == "phase_mad" else None,
+        angle_bin_count=52,
+    )
+
+    ang = np.asarray(ang_series.to_numpy(dtype=float), dtype=float)
+    val = np.asarray(val_series.to_numpy(dtype=float), dtype=float)
+    if len(ang) == 0 or len(val) == 0:
+        raise ValueError("No original binned rows available.")
+    return ang, val
+
+
+def _prepare_angle_values_for_plot(
+    df,
+    *,
+    angle_col: str,
+    metric_col: str,
+    sentinels: list[float],
+    agg_mode: str,
+    outlier_threshold: Optional[float],
+    outlier_method: str,
+    use_original_binned: bool,
+    keep_index_alignment: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    if use_original_binned:
+        ang, val = _prepare_original_binned_angle_values(
+            df,
+            angle_col,
+            metric_col,
+            sentinels,
+            outlier_threshold,
+            outlier_method,
+        )
+        if keep_index_alignment:
+            return ang, val
+        m = np.isfinite(ang) & np.isfinite(val)
+        ang = ang[m]
+        val = val[m]
+        if len(ang) == 0:
+            raise ValueError("No valid original binned values after filtering.")
+        return ang, val
+    return prepare_angle_value_agg(
+        df,
+        angle_col,
+        metric_col,
+        sentinels,
+        agg=agg_mode,
+        outlier_threshold=outlier_threshold,
+        outlier_method=outlier_method,
+    )
+
+
 def _series_pedal_stroke(
     df,
     metric_col: str,
@@ -266,6 +341,10 @@ def _get_plot_df(
         binned = state.binned.get(source_id)
         if binned is not None and not binned.empty:
             return binned
+        raise ValueError(
+            "Original Dashboard Bins is enabled, but no imported "
+            "left_pedalstroke_avg data is available for this dataset."
+        )
     return state.loaded[source_id]
 
 
@@ -308,6 +387,45 @@ def _aggregate_baseline_angle_values(
     outlier_method: str,
     use_original_binned: bool,
 ) -> tuple[np.ndarray, np.ndarray]:
+    if use_original_binned:
+        if not baseline_ids:
+            raise ValueError("At least one baseline dataset is required for comparison.")
+        ref_df = _get_plot_df(state, baseline_ids[0], use_original_binned=True)
+        ref_ang, ref_val = _prepare_angle_values_for_plot(
+            ref_df,
+            angle_col=angle_col,
+            metric_col=metric_col,
+            sentinels=sentinels,
+            agg_mode=agg_mode,
+            outlier_threshold=outlier_threshold,
+            outlier_method=outlier_method,
+            use_original_binned=True,
+            keep_index_alignment=True,
+        )
+        baseline_vals = [_apply_value_mode(ref_val, value_mode)]
+        for sid in baseline_ids[1:]:
+            baseline_df = _get_plot_df(state, sid, use_original_binned=True)
+            ang, val = _prepare_angle_values_for_plot(
+                baseline_df,
+                angle_col=angle_col,
+                metric_col=metric_col,
+                sentinels=sentinels,
+                agg_mode=agg_mode,
+                outlier_threshold=outlier_threshold,
+                outlier_method=outlier_method,
+                use_original_binned=True,
+                keep_index_alignment=True,
+            )
+            if len(ang) != len(ref_ang):
+                raise ValueError(
+                    "Original Dashboard Bins comparison requires matching row counts across "
+                    "baseline datasets."
+                )
+            baseline_vals.append(_apply_value_mode(val, value_mode))
+        baseline_stack = np.vstack([np.asarray(v, dtype=float) for v in baseline_vals])
+        baseline_mean = np.nanmean(baseline_stack, axis=0)
+        return np.asarray(ref_ang, dtype=float), np.asarray(baseline_mean, dtype=float)
+
     baseline_curves: list[np.ndarray] = []
     theta = np.linspace(0.0, 360.0, 361, dtype=float)
     for sid in baseline_ids:
@@ -430,17 +548,28 @@ def prepare_radar_plot(
             label = state.id_to_display.get(sid, sid)
             try:
                 plot_df = _get_plot_df(state, sid, use_original_binned)
-                ang, val = prepare_angle_value_agg(
+                ang, val = _prepare_angle_values_for_plot(
                     plot_df,
-                    angle_col,
-                    metric_col,
-                    sentinels,
-                    agg=agg_mode,
+                    angle_col=angle_col,
+                    metric_col=metric_col,
+                    sentinels=sentinels,
+                    agg_mode=agg_mode,
                     outlier_threshold=outlier_threshold,
                     outlier_method=outlier_method,
+                    use_original_binned=use_original_binned,
+                    keep_index_alignment=use_original_binned,
                 )
                 val2 = _apply_value_mode(val, value_mode)
-                base_at = circular_interp_baseline(b_ang, b_val2, ang)
+                if use_original_binned:
+                    if len(val2) != len(b_val2):
+                        raise ValueError(
+                            "Original Dashboard Bins comparison requires matching row counts "
+                            "with the baseline dataset."
+                        )
+                    ang = np.asarray(b_ang, dtype=float)
+                    base_at = np.asarray(b_val2, dtype=float)
+                else:
+                    base_at = circular_interp_baseline(b_ang, b_val2, ang)
                 delta = val2 - base_at
                 m = np.isfinite(delta) & np.isfinite(ang)
                 ang = ang[m]
@@ -483,14 +612,15 @@ def prepare_radar_plot(
         label = state.id_to_display.get(sid, sid)
         try:
             plot_df = _get_plot_df(state, sid, use_original_binned)
-            ang, val = prepare_angle_value_agg(
+            ang, val = _prepare_angle_values_for_plot(
                 plot_df,
-                angle_col,
-                metric_col,
-                sentinels,
-                agg=agg_mode,
+                angle_col=angle_col,
+                metric_col=metric_col,
+                sentinels=sentinels,
+                agg_mode=agg_mode,
                 outlier_threshold=outlier_threshold,
                 outlier_method=outlier_method,
+                use_original_binned=use_original_binned,
             )
             val2 = _apply_value_mode(val, value_mode)
             if close_loop and len(ang) > 2:
@@ -566,26 +696,38 @@ def prepare_cartesian_plot(
             label = state.id_to_display.get(sid, sid)
             try:
                 plot_df = _get_plot_df(state, sid, use_original_binned)
-                ang, val = prepare_angle_value_agg(
+                ang, val = _prepare_angle_values_for_plot(
                     plot_df,
-                    angle_col,
-                    metric_col,
-                    sentinels,
-                    agg=agg_mode,
+                    angle_col=angle_col,
+                    metric_col=metric_col,
+                    sentinels=sentinels,
+                    agg_mode=agg_mode,
                     outlier_threshold=outlier_threshold,
                     outlier_method=outlier_method,
+                    use_original_binned=use_original_binned,
+                    keep_index_alignment=use_original_binned,
                 )
                 val2 = _apply_value_mode(val, value_mode)
-                base_at = circular_interp_baseline(b_ang, b_val2, ang)
+                if use_original_binned:
+                    if len(val2) != len(b_val2):
+                        raise ValueError(
+                            "Original Dashboard Bins comparison requires matching row counts "
+                            "with the baseline dataset."
+                        )
+                    ang = np.asarray(b_ang, dtype=float)
+                    base_at = np.asarray(b_val2, dtype=float)
+                else:
+                    base_at = circular_interp_baseline(b_ang, b_val2, ang)
                 delta = val2 - base_at
                 m = np.isfinite(delta) & np.isfinite(ang)
                 ang = ang[m]
                 delta = delta[m]
                 if len(ang) == 0:
                     raise ValueError("No valid comparison values after filtering.")
-                order_idx = np.argsort(ang)
-                ang = ang[order_idx]
-                delta = delta[order_idx]
+                if not use_original_binned:
+                    order_idx = np.argsort(ang)
+                    ang = ang[order_idx]
+                    delta = delta[order_idx]
                 if close_loop and len(ang) > 2:
                     ang = np.concatenate([ang, [360.0]])
                     delta = np.concatenate([delta, [delta[0]]])
@@ -600,19 +742,21 @@ def prepare_cartesian_plot(
         label = state.id_to_display.get(sid, sid)
         try:
             plot_df = _get_plot_df(state, sid, use_original_binned)
-            ang, val = prepare_angle_value_agg(
+            ang, val = _prepare_angle_values_for_plot(
                 plot_df,
-                angle_col,
-                metric_col,
-                sentinels,
-                agg=agg_mode,
+                angle_col=angle_col,
+                metric_col=metric_col,
+                sentinels=sentinels,
+                agg_mode=agg_mode,
                 outlier_threshold=outlier_threshold,
                 outlier_method=outlier_method,
+                use_original_binned=use_original_binned,
             )
             val2 = _apply_value_mode(val, value_mode)
-            order_idx = np.argsort(ang)
-            ang = ang[order_idx]
-            val2 = val2[order_idx]
+            if not use_original_binned:
+                order_idx = np.argsort(ang)
+                ang = ang[order_idx]
+                val2 = val2[order_idx]
             if close_loop and len(ang) > 2:
                 ang = np.concatenate([ang, [360.0]])
                 val2 = np.concatenate([val2, [val2[0]]])

@@ -61,18 +61,33 @@ def extract_named_binned_datasets(obj: Any) -> List[Tuple[str, List[Dict[str, An
     """
     Extract left_pedalstroke_avg records for each dataset name (if present).
 
+    Accepts common key casing variants (e.g. ``left_pedalStroke_avg``) from
+    copied browser/devtools payloads.
+
     Returns: list of (name, records_list)
     """
+    def _get_binned_records(container: Any) -> List[Dict[str, Any]] | None:
+        if not isinstance(container, dict):
+            return None
+        for key in ("left_pedalstroke_avg", "left_pedalStroke_avg"):
+            value = container.get(key)
+            if isinstance(value, list):
+                return value
+        for key, value in container.items():
+            if str(key).strip().lower() == "left_pedalstroke_avg" and isinstance(value, list):
+                return value
+        return None
+
     if isinstance(obj, dict):
-        if "left_pedalstroke_avg" in obj and isinstance(obj["left_pedalstroke_avg"], list):
-            return [("Dataset", obj["left_pedalstroke_avg"])]
+        top_level_binned = _get_binned_records(obj)
+        if top_level_binned is not None:
+            return [("Dataset", top_level_binned)]
 
         out: List[Tuple[str, List[Dict[str, Any]]]] = []
         for name, v in obj.items():
-            if isinstance(v, dict) and "left_pedalstroke_avg" in v and isinstance(
-                v["left_pedalstroke_avg"], list
-            ):
-                out.append((str(name), v["left_pedalstroke_avg"]))
+            records = _get_binned_records(v)
+            if records is not None:
+                out.append((str(name), records))
         return out
 
     return []

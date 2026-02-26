@@ -1801,7 +1801,9 @@ class DashboardDataPlotter(tk.Tk):
              "Lock the y-range to the chosen values\n(easier to compare different plots)."),
             (self.original_binned_btn,
              "Use the pre-binned 52-row left_pedalstroke_avg data\n"
-             "when available (radar/cartesian/bar only)."),
+             "when available (radar/cartesian/bar only).\n"
+             "Radar/Cartesian compare mode uses the baseline dataset's\n"
+             "bin angles and matches other datasets by bin index."),
             (self.rb_absolute, "Plot absolute metric values."),
             (self.rb_percent_mean,
              "Plot values as percent of dataset mean (radar/cartesian only)."),
@@ -1954,7 +1956,14 @@ class DashboardDataPlotter(tk.Tk):
                 continue
             kind = target.get("kind")
             if kind == "line":
-                inds = list((details or {}).get("ind") or [])
+                inds_raw = details.get("ind") if isinstance(details, dict) else None
+                if inds_raw is None:
+                    inds = []
+                else:
+                    try:
+                        inds = list(inds_raw)
+                    except Exception:
+                        inds = [inds_raw]
                 if not inds:
                     continue
                 x_vals = target.get("x_data")
@@ -4720,6 +4729,89 @@ class DashboardDataPlotter(tk.Tk):
                 + "\n\nConsider increasing the outlier threshold.",
             )
 
+    def _warn_original_binned_integrity_if_needed(
+        self,
+        plot_type,
+        angle_col,
+        metric_col,
+        sentinels,
+        compare,
+        baseline_ids,
+    ) -> None:
+        if self._restoring_history:
+            return
+        plot_type = (plot_type or "").strip().lower()
+        if plot_type not in ("radar", "cartesian"):
+            return
+        if not self._use_original_binned_for_plot(plot_type):
+            return
+
+        baseline_id = baseline_ids[0] if baseline_ids else ""
+        sids = self._get_plot_sids(plot_type, compare, baseline_id)
+        if not sids:
+            return
+
+        expected_rows = None
+        if compare and baseline_id:
+            baseline_df = self.state.binned.get(baseline_id)
+            if baseline_df is not None and not baseline_df.empty:
+                expected_rows = len(baseline_df)
+
+        issues = []
+        for sid in sids:
+            label = self.state.id_to_display.get(sid, os.path.basename(sid))
+            df = self.state.binned.get(sid)
+            if df is None or df.empty:
+                issues.append(f"{label}: missing/empty left_pedalstroke_avg block.")
+                continue
+
+            row_count = len(df)
+            if row_count != 52:
+                issues.append(f"{label}: expected 52 binned rows, found {row_count}.")
+            if expected_rows is not None and row_count != expected_rows:
+                issues.append(
+                    f"{label}: row count {row_count} does not match baseline ({expected_rows}) for index-aligned comparison."
+                )
+
+            if angle_col and angle_col not in df.columns:
+                issues.append(f"{label}: missing angle column '{angle_col}' in left_pedalstroke_avg.")
+                continue
+            if metric_col and metric_col not in df.columns:
+                issues.append(f"{label}: missing metric column '{metric_col}' in left_pedalstroke_avg.")
+                continue
+
+            if angle_col and metric_col:
+                convert_br = angle_col in ("leftPedalCrankAngle", "rightPedalCrankAngle")
+                ang = wrap_angle_deg(
+                    sanitize_numeric(df[angle_col], sentinels),
+                    convert_br_to_standard=convert_br,
+                ).to_numpy(dtype=float)
+                vals = sanitize_numeric(df[metric_col], sentinels).to_numpy(dtype=float)
+                missing_angles = int(np.sum(~np.isfinite(ang)))
+                missing_vals = int(np.sum(~np.isfinite(vals)))
+                if missing_angles > 0:
+                    issues.append(f"{label}: {missing_angles} bin angle value(s) are missing/invalid.")
+                if missing_vals > 0:
+                    issues.append(f"{label}: {missing_vals} '{metric_col}' bin value(s) are missing/invalid.")
+
+        if not issues:
+            return
+
+        msg = (
+            "Original Dashboard Bins integrity check found issues in imported left_pedalstroke_avg data:\n\n"
+            + "\n".join(issues[:12])
+        )
+        if len(issues) > 12:
+            msg += f"\n... and {len(issues) - 12} more issue(s)."
+        if compare and baseline_id:
+            b_label = self.state.id_to_display.get(baseline_id, baseline_id)
+            msg += (
+                "\n\nComparison alignment note:\n"
+                f"- Baseline bin angles come from '{b_label}'\n"
+                "- Other datasets are matched by bin index (row position)."
+            )
+        messagebox.showwarning("Original Dashboard Bins check", msg)
+
     def _collect_outlier_points(
         self,
         plot_type,
@@ -6882,6 +6974,15 @@ class DashboardDataPlotter(tk.Tk):
         fixed_range = self._get_fixed_range()
         if fixed_range == "invalid":
             return
+
+        self._warn_original_binned_integrity_if_needed(
+            plot_type,
+            angle_col,
+            metric_col,
+            sentinels,
+            compare,
+            baseline_ids,
+        )
 
         if use_plotly_live:
             if plot_type == "timeseries":

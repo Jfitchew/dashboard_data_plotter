@@ -159,6 +159,11 @@ class ToolTip:
                 pass
             self._tip = None
 
+    def set_text(self, text):
+        self.text = text or ""
+        if self._tip is not None:
+            self._hide()
+
 
 class DashboardDataPlotter(tk.Tk):
     def __init__(self):
@@ -1416,6 +1421,10 @@ class DashboardDataPlotter(tk.Tk):
 
         self.status = tk.StringVar(
             value="Load one or more JSON files, or paste a dataset object, to begin.")
+        self.status_line = tk.StringVar(value="")
+        self._status_tooltip = None
+        self._status_trace_id = self.status.trace_add(
+            "write", self._on_status_text_changed)
 
         ttk.Label(report_tab, text="Reports", font=(
             "Segoe UI", 12, "bold")).grid(row=0, column=0, sticky="w")
@@ -1495,8 +1504,15 @@ class DashboardDataPlotter(tk.Tk):
         self.btn_export_report_pdf.grid(
             row=0, column=3, sticky="ew", padx=(6, 0))
 
-        ttk.Label(left, textvariable=self.status, wraplength=380, foreground="#333").grid(
-            row=2, column=0, sticky="ew", pady=(10, 0))
+        self.status_label = ttk.Label(
+            left,
+            textvariable=self.status_line,
+            foreground="#333",
+            anchor="w",
+        )
+        self.status_label.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        self._status_tooltip = ToolTip(self.status_label, self.status.get())
+        self._sync_status_line_text()
 
         self._on_plot_type_change(apply_default_agg=False)
         self._set_compare_controls_state()
@@ -1840,6 +1856,20 @@ class DashboardDataPlotter(tk.Tk):
         ]
         for widget, text in tips:
             ToolTip(widget, text)
+
+    def _on_status_text_changed(self, *_args) -> None:
+        self._sync_status_line_text()
+
+    def _sync_status_line_text(self) -> None:
+        full_text = str(self.status.get() or "")
+        single_line = " ".join(full_text.splitlines()).strip()
+        if len(single_line) > 78:
+            display = single_line[:77].rstrip() + "..."
+        else:
+            display = single_line
+        self.status_line.set(display)
+        if self._status_tooltip is not None:
+            self._status_tooltip.set_text(full_text)
 
     def _redraw_empty(self):
         self._reset_plot_hover_state(redraw=False)

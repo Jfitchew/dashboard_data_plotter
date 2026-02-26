@@ -1,6 +1,7 @@
 # Change Log
 
 3.29 - New Build Release
+  - 3.45.1 - 2026-02-26 - Kept the Tk left-panel status/info message to a single line (preventing it from expanding over controls) and added a hover tooltip on the status line to show the full message text.
   - 3.44.4 - 2026-02-26 - Added an `Original Dashboard Bins` pre-plot integrity warning in the Tk UI (checks imported `left_pedalstroke_avg` row count, required angle/metric columns, and missing/invalid bin values) and clarified via tooltip that radar/cartesian comparison mode aligns other datasets to the baseline by bin index while using baseline bin angles.
   - 3.44.3 - 2026-02-26 - Changed `Original Dashboard Bins` radar/cartesian plotting to use each `left_pedalstroke_avg` row's own averaged crank angle directly (no 52-bin re-aggregation), and in comparison mode align datasets to the baseline by bin index while plotting deltas at the baseline dataset's bin angles.
   - 3.44.2 - 2026-02-26 - Fixed binned dashboard-data import to accept `left_pedalStroke_avg` (capital-`S`) and other case variants when loading/pasting JSON, so `Original Dashboard Bins` can populate from browser-copied payloads and be preserved on subsequent `Save Data` / project saves.

@@ -46,6 +46,21 @@ def to_percent_of_mean(values: np.ndarray) -> np.ndarray:
     return 100.0 * v / span
 
 
+def match_mean(values: np.ndarray, target_mean: float) -> np.ndarray:
+    """Scale values so their finite mean matches ``target_mean``."""
+    v = np.asarray(values, dtype=float)
+    finite = v[np.isfinite(v)]
+    if finite.size == 0:
+        raise ValueError("No finite values; cannot match mean.")
+
+    mu = float(np.nanmean(finite))
+    if not np.isfinite(target_mean):
+        raise ValueError("Target mean is invalid; cannot match mean.")
+    if abs(mu) <= 1e-12:
+        raise ValueError("Dataset mean is zero/invalid; cannot match mean.")
+    return v * (float(target_mean) / mu)
+
+
 def circular_interp_baseline(b_ang_deg: np.ndarray, b_val: np.ndarray, q_ang_deg: np.ndarray) -> np.ndarray:
     """Interpolate baseline values at query angles with circular wrap."""
     if len(b_ang_deg) < 2:

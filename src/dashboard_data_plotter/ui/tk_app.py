@@ -1,5 +1,6 @@
 from dashboard_data_plotter.plotting.helpers import (
     to_percent_of_mean,
+    match_mean,
     circular_interp_baseline,
     fmt_abs_ticks,
     fmt_delta_ticks,
@@ -195,7 +196,7 @@ class DashboardDataPlotter(tk.Tk):
         self.sentinels_var = tk.StringVar(value=DEFAULT_SENTINELS)
 
         # Value mode used for BOTH normal plots and comparison plots
-        # "absolute" or "percent_mean"
+        # "absolute", "percent_mean", or "mean_matched"
         self.value_mode_var = tk.StringVar(value="absolute")
 
         # Plot type
@@ -1340,20 +1341,23 @@ class DashboardDataPlotter(tk.Tk):
         # Value mode
         vm_row = ttk.Frame(plot_modes_group)
         vm_row.grid(row=0, column=0, sticky="ew")
-        vm_row.columnconfigure(3, weight=1)
+        vm_row.columnconfigure(4, weight=1)
         ttk.Label(vm_row, text="Value:").grid(
             row=0, column=0, sticky="w")
         self.rb_absolute = ttk.Radiobutton(
-            vm_row, text="Absolute metric values", variable=self.value_mode_var,
+            vm_row, text="Absolute values", variable=self.value_mode_var,
             value="absolute")
         self.rb_absolute.grid(row=0, column=1, sticky="w", padx=(12, 0))
         self.rb_percent_mean = ttk.Radiobutton(
-            vm_row, text="% of dataset mean", variable=self.value_mode_var, value="percent_mean")
+            vm_row, text="% of mean", variable=self.value_mode_var, value="percent_mean")
         self.rb_percent_mean.grid(row=0, column=2, sticky="w", padx=(20, 0))
+        self.rb_mean_matched = ttk.Radiobutton(
+            vm_row, text="Mean-matched", variable=self.value_mode_var, value="mean_matched")
+        self.rb_mean_matched.grid(row=0, column=3, sticky="w", padx=(20, 0))
         self.original_binned_btn = ttk.Button(
             vm_row, text="Original Dashboard Bins", command=self._on_original_binned_toggle)
         self.original_binned_btn.grid(
-            row=0, column=4, sticky="e", padx=(10, 0))
+            row=0, column=5, sticky="e", padx=(10, 0))
 
         ttk.Separator(plot_modes_group).grid(
             row=1, column=0, sticky="ew", pady=6)
@@ -1822,7 +1826,9 @@ class DashboardDataPlotter(tk.Tk):
              "bin angles and matches other datasets by bin index."),
             (self.rb_absolute, "Plot absolute metric values."),
             (self.rb_percent_mean,
-             "Plot values as percent of dataset mean (radar/cartesian only)."),
+             "Plot values as percent of dataset mean (radar/cartesian/time series only)."),
+            (self.rb_mean_matched,
+             "Scale each dataset to a common mean level while preserving absolute curve shape."),
             (self.chk_compare,
              "Plot each dataset as a difference from the selected baseline."),
             (self.baseline_menu_btn,
@@ -4508,7 +4514,10 @@ class DashboardDataPlotter(tk.Tk):
         if hasattr(self, "rb_percent_mean"):
             self.rb_percent_mean.configure(
                 state=("disabled" if is_bar else "normal"))
-        if is_bar and self.value_mode_var.get() == "percent_mean":
+        if hasattr(self, "rb_mean_matched"):
+            self.rb_mean_matched.configure(
+                state=("disabled" if is_bar else "normal"))
+        if is_bar and self.value_mode_var.get() != "absolute":
             self.value_mode_var.set("absolute")
         self._set_plot_type_controls_state()
         self._refresh_angle_choices()
@@ -4874,6 +4883,25 @@ class DashboardDataPlotter(tk.Tk):
         if not sids:
             return []
 
+        value_mode_target_mean = None
+        if value_mode == "mean_matched":
+            target_ids = [sid for sid in (baseline_ids or []) if sid in self.state.loaded] if compare else [
+                sid for sid in sids if sid in self.state.loaded
+            ]
+            if not target_ids and baseline_id in self.state.loaded:
+                target_ids = [baseline_id]
+            mean_values = []
+            for sid in target_ids:
+                df = self.state.loaded.get(sid)
+                if df is None or metric_col not in df.columns:
+                    continue
+                vals = sanitize_numeric(df[metric_col], sentinels).to_numpy(dtype=float)
+                finite = vals[np.isfinite(vals)]
+                if finite.size:
+                    mean_values.append(float(np.nanmean(finite)))
+            if mean_values:
+                value_mode_target_mean = float(np.nanmean(np.asarray(mean_values, dtype=float)))
+
         if plot_type == "timeseries":
             if agg_mode != "raw":
                 return []
@@ -4916,6 +4944,8 @@ class DashboardDataPlotter(tk.Tk):
                 vals = values.to_numpy(dtype=float)
                 if value_mode == "percent_mean":
                     vals = to_percent_of_mean(vals)
+                elif value_mode == "mean_matched" and value_mode_target_mean is not None:
+                    vals = match_mean(vals, value_mode_target_mean)
                 t = np.arange(len(vals), dtype=float) / 100.0
 
                 if compare:
@@ -4956,6 +4986,8 @@ class DashboardDataPlotter(tk.Tk):
                     )
                     if value_mode == "percent_mean":
                         baseline_vals = to_percent_of_mean(baseline_vals)
+                    elif value_mode == "mean_matched" and value_mode_target_mean is not None:
+                        baseline_vals = match_mean(baseline_vals, value_mode_target_mean)
                 except Exception:
                     baseline_ang, baseline_vals = None, None
 
@@ -4987,6 +5019,8 @@ class DashboardDataPlotter(tk.Tk):
                 vals = values.to_numpy(dtype=float)
                 if value_mode == "percent_mean":
                     vals = to_percent_of_mean(vals)
+                elif value_mode == "mean_matched" and value_mode_target_mean is not None:
+                    vals = match_mean(vals, value_mode_target_mean)
                 ang_vals = ang_vals[mask]
                 vals = vals[mask]
 
@@ -6788,7 +6822,7 @@ class DashboardDataPlotter(tk.Tk):
             return
 
         plot_type = (self.plot_type_var.get() or "radar").strip().lower()
-        if plot_type == "bar" and value_mode == "percent_mean":
+        if plot_type == "bar" and value_mode != "absolute":
             value_mode = "absolute"
 
         if plot_type in ("radar", "cartesian") and not angle_col:
@@ -6998,7 +7032,7 @@ class DashboardDataPlotter(tk.Tk):
             return
 
         plot_type = (self.plot_type_var.get() or "radar").strip().lower()
-        if plot_type == "bar" and value_mode == "percent_mean":
+        if plot_type == "bar" and value_mode != "absolute":
             value_mode = "absolute"
 
         fixed_range = self._get_fixed_range()

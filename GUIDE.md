@@ -60,7 +60,8 @@ Choose how to visualize:
 
 - **Value mode**
   - Absolute values.
-  - % of dataset mean (Radar/Cartesian only).
+  - % of mean.
+  - Mean-matched.
 
 - **Comparison**
   - Difference vs baseline dataset(s).

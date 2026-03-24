@@ -17,6 +17,7 @@ from dashboard_data_plotter.data.loaders import (
 )
 from dashboard_data_plotter.plotting.helpers import (
     circular_interp_baseline,
+    match_mean,
     to_percent_of_mean,
 )
 
@@ -85,11 +86,50 @@ def _agg_label(agg_mode: str) -> str:
     }.get(str(agg_mode).lower(), "Mean")
 
 
-def _apply_value_mode(values: np.ndarray, mode: str) -> np.ndarray:
+def _value_mode_label(mode: str) -> str:
+    if mode == "absolute":
+        return "absolute"
+    if mode == "percent_mean":
+        return "% of mean"
+    if mode == "mean_matched":
+        return "mean-matched"
+    raise ValueError(f"Unknown value mode: {mode}")
+
+
+def _finite_mean(values: np.ndarray) -> float:
+    arr = np.asarray(values, dtype=float)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        raise ValueError("No finite values; cannot compute mean.")
+    return float(np.nanmean(finite))
+
+
+def _common_target_mean(series_list: Iterable[np.ndarray]) -> float:
+    means: list[float] = []
+    for values in series_list:
+        try:
+            means.append(_finite_mean(values))
+        except ValueError:
+            continue
+    if not means:
+        raise ValueError("No valid dataset means available for mean-matched mode.")
+    return float(np.nanmean(np.asarray(means, dtype=float)))
+
+
+def _apply_value_mode(
+    values: np.ndarray,
+    mode: str,
+    *,
+    target_mean: Optional[float] = None,
+) -> np.ndarray:
     if mode == "absolute":
         return np.asarray(values, dtype=float)
     if mode == "percent_mean":
         return to_percent_of_mean(values)
+    if mode == "mean_matched":
+        if target_mean is None:
+            raise ValueError("Target mean is required for mean-matched mode.")
+        return match_mean(values, target_mean)
     raise ValueError(f"Unknown value mode: {mode}")
 
 
@@ -387,6 +427,18 @@ def _aggregate_baseline_angle_values(
     outlier_method: str,
     use_original_binned: bool,
 ) -> tuple[np.ndarray, np.ndarray]:
+    target_mean = _resolve_angle_target_mean(
+        state,
+        baseline_ids,
+        angle_col=angle_col,
+        metric_col=metric_col,
+        sentinels=sentinels,
+        agg_mode=agg_mode,
+        value_mode=value_mode,
+        outlier_threshold=outlier_threshold,
+        outlier_method=outlier_method,
+        use_original_binned=use_original_binned,
+    )
     if use_original_binned:
         if not baseline_ids:
             raise ValueError("At least one baseline dataset is required for comparison.")
@@ -402,7 +454,7 @@ def _aggregate_baseline_angle_values(
             use_original_binned=True,
             keep_index_alignment=True,
         )
-        baseline_vals = [_apply_value_mode(ref_val, value_mode)]
+        baseline_vals = [_apply_value_mode(ref_val, value_mode, target_mean=target_mean)]
         for sid in baseline_ids[1:]:
             baseline_df = _get_plot_df(state, sid, use_original_binned=True)
             ang, val = _prepare_angle_values_for_plot(
@@ -421,7 +473,7 @@ def _aggregate_baseline_angle_values(
                     "Original Dashboard Bins comparison requires matching row counts across "
                     "baseline datasets."
                 )
-            baseline_vals.append(_apply_value_mode(val, value_mode))
+            baseline_vals.append(_apply_value_mode(val, value_mode, target_mean=target_mean))
         baseline_stack = np.vstack([np.asarray(v, dtype=float) for v in baseline_vals])
         baseline_mean = np.nanmean(baseline_stack, axis=0)
         return np.asarray(ref_ang, dtype=float), np.asarray(baseline_mean, dtype=float)
@@ -439,11 +491,44 @@ def _aggregate_baseline_angle_values(
             outlier_threshold=outlier_threshold,
             outlier_method=outlier_method,
         )
-        b_val2 = _apply_value_mode(b_val, value_mode)
+        b_val2 = _apply_value_mode(b_val, value_mode, target_mean=target_mean)
         baseline_curves.append(circular_interp_baseline(b_ang, b_val2, theta))
     baseline_stack = np.vstack(baseline_curves)
     baseline_mean = np.nanmean(baseline_stack, axis=0)
     return theta, baseline_mean
+
+
+def _resolve_angle_target_mean(
+    state: ProjectState,
+    source_ids: Iterable[str],
+    *,
+    angle_col: str,
+    metric_col: str,
+    sentinels: list[float],
+    agg_mode: str,
+    value_mode: str,
+    outlier_threshold: Optional[float],
+    outlier_method: str,
+    use_original_binned: bool,
+) -> Optional[float]:
+    if value_mode != "mean_matched":
+        return None
+    series_list: list[np.ndarray] = []
+    for sid in source_ids:
+        plot_df = _get_plot_df(state, sid, use_original_binned)
+        _, values = _prepare_angle_values_for_plot(
+            plot_df,
+            angle_col=angle_col,
+            metric_col=metric_col,
+            sentinels=sentinels,
+            agg_mode=agg_mode,
+            outlier_threshold=outlier_threshold,
+            outlier_method=outlier_method,
+            use_original_binned=use_original_binned,
+            keep_index_alignment=use_original_binned,
+        )
+        series_list.append(np.asarray(values, dtype=float))
+    return _common_target_mean(series_list)
 
 
 def _aggregate_timeseries_baseline(
@@ -457,22 +542,36 @@ def _aggregate_timeseries_baseline(
     outlier_threshold: Optional[float],
     outlier_method: str,
 ) -> np.ndarray:
+    target_mean = _resolve_timeseries_target_mean(
+        state,
+        baseline_ids,
+        metric_col=metric_col,
+        agg_mode=agg_mode,
+        value_mode=value_mode,
+        sentinels=sentinels,
+        outlier_threshold=outlier_threshold,
+        outlier_method=outlier_method,
+    )
     series_list: list[np.ndarray] = []
     for sid in baseline_ids:
         if agg_mode == "pedal_stroke":
             _, vals = _series_pedal_stroke(
                 state.loaded[sid], metric_col, sentinels, outlier_threshold, outlier_method
             )
-            val2 = _apply_value_mode(vals, value_mode)
+            val2 = _apply_value_mode(vals, value_mode, target_mean=target_mean)
         elif agg_mode == "roll_360deg":
             _, vals = _series_roll_360(
                 state.loaded[sid], metric_col, sentinels, outlier_threshold, outlier_method
             )
-            val2 = _apply_value_mode(vals, value_mode)
+            val2 = _apply_value_mode(vals, value_mode, target_mean=target_mean)
         else:
             vals = sanitize_numeric(state.loaded[sid][metric_col], sentinels)
             vals = apply_outlier_filter(vals, threshold=outlier_threshold, method=outlier_method)
-            val2 = _apply_value_mode(vals.to_numpy(dtype=float), value_mode)
+            val2 = _apply_value_mode(
+                vals.to_numpy(dtype=float),
+                value_mode,
+                target_mean=target_mean,
+            )
         series_list.append(np.asarray(val2, dtype=float))
 
     max_len = max((len(arr) for arr in series_list), default=0)
@@ -482,6 +581,37 @@ def _aggregate_timeseries_baseline(
     for idx, arr in enumerate(series_list):
         stack[idx, : len(arr)] = arr
     return np.nanmean(stack, axis=0)
+
+
+def _resolve_timeseries_target_mean(
+    state: ProjectState,
+    source_ids: Iterable[str],
+    *,
+    metric_col: str,
+    agg_mode: str,
+    value_mode: str,
+    sentinels: list[float],
+    outlier_threshold: Optional[float],
+    outlier_method: str,
+) -> Optional[float]:
+    if value_mode != "mean_matched":
+        return None
+    series_list: list[np.ndarray] = []
+    for sid in source_ids:
+        if agg_mode == "pedal_stroke":
+            _, vals = _series_pedal_stroke(
+                state.loaded[sid], metric_col, sentinels, outlier_threshold, outlier_method
+            )
+        elif agg_mode == "roll_360deg":
+            _, vals = _series_roll_360(
+                state.loaded[sid], metric_col, sentinels, outlier_threshold, outlier_method
+            )
+        else:
+            vals = sanitize_numeric(state.loaded[sid][metric_col], sentinels)
+            vals = apply_outlier_filter(vals, threshold=outlier_threshold, method=outlier_method)
+            vals = vals.to_numpy(dtype=float)
+        series_list.append(np.asarray(vals, dtype=float))
+    return _common_target_mean(series_list)
 def prepare_radar_plot(
     state: ProjectState,
     *,
@@ -513,12 +643,25 @@ def prepare_radar_plot(
     use_original_binned = _resolve_use_original_binned(state, use_original_binned)
 
     data = RadarPlotData(
-        mode_label="absolute" if value_mode == "absolute" else "% of mean",
+        mode_label=_value_mode_label(value_mode),
         agg_label=_agg_label(agg_mode),
         metric_label=metric_col,
         compare=compare,
     )
     order = ordered_source_ids(state)
+    visible_ids = [sid for sid in order if state.show_flag.get(sid, True)]
+    target_mean = _resolve_angle_target_mean(
+        state,
+        baseline_ids if compare else visible_ids,
+        angle_col=angle_col,
+        metric_col=metric_col,
+        sentinels=sentinels,
+        agg_mode=agg_mode,
+        value_mode=value_mode,
+        outlier_threshold=outlier_threshold,
+        outlier_method=outlier_method,
+        use_original_binned=use_original_binned,
+    )
 
     if compare:
         if not baseline_ids:
@@ -559,7 +702,7 @@ def prepare_radar_plot(
                     use_original_binned=use_original_binned,
                     keep_index_alignment=use_original_binned,
                 )
-                val2 = _apply_value_mode(val, value_mode)
+                val2 = _apply_value_mode(val, value_mode, target_mean=target_mean)
                 if use_original_binned:
                     if len(val2) != len(b_val2):
                         raise ValueError(
@@ -622,7 +765,7 @@ def prepare_radar_plot(
                 outlier_method=outlier_method,
                 use_original_binned=use_original_binned,
             )
-            val2 = _apply_value_mode(val, value_mode)
+            val2 = _apply_value_mode(val, value_mode, target_mean=target_mean)
             if close_loop and len(ang) > 2:
                 ang = np.concatenate([ang, [ang[0]]])
                 val2 = np.concatenate([val2, [val2[0]]])
@@ -664,12 +807,25 @@ def prepare_cartesian_plot(
     use_original_binned = _resolve_use_original_binned(state, use_original_binned)
 
     data = CartesianPlotData(
-        mode_label="absolute" if value_mode == "absolute" else "% of mean",
+        mode_label=_value_mode_label(value_mode),
         agg_label=_agg_label(agg_mode),
         metric_label=metric_col,
         compare=compare,
     )
     order = ordered_source_ids(state)
+    visible_ids = [sid for sid in order if state.show_flag.get(sid, True)]
+    target_mean = _resolve_angle_target_mean(
+        state,
+        baseline_ids if compare else visible_ids,
+        angle_col=angle_col,
+        metric_col=metric_col,
+        sentinels=sentinels,
+        agg_mode=agg_mode,
+        value_mode=value_mode,
+        outlier_threshold=outlier_threshold,
+        outlier_method=outlier_method,
+        use_original_binned=use_original_binned,
+    )
 
     if compare:
         if not baseline_ids:
@@ -707,7 +863,7 @@ def prepare_cartesian_plot(
                     use_original_binned=use_original_binned,
                     keep_index_alignment=use_original_binned,
                 )
-                val2 = _apply_value_mode(val, value_mode)
+                val2 = _apply_value_mode(val, value_mode, target_mean=target_mean)
                 if use_original_binned:
                     if len(val2) != len(b_val2):
                         raise ValueError(
@@ -752,7 +908,7 @@ def prepare_cartesian_plot(
                 outlier_method=outlier_method,
                 use_original_binned=use_original_binned,
             )
-            val2 = _apply_value_mode(val, value_mode)
+            val2 = _apply_value_mode(val, value_mode, target_mean=target_mean)
             if not use_original_binned:
                 order_idx = np.argsort(ang)
                 ang = ang[order_idx]
@@ -785,8 +941,8 @@ def prepare_bar_plot(
         state, None, metric_col, agg_mode, value_mode, compare, baseline_id
     )
     baseline_ids = _resolve_baseline_ids(state, baseline_ids, baseline_id)
-    if value_mode == "percent_mean":
-        raise ValueError("Bar plot does not support % of dataset mean.")
+    if value_mode != "absolute":
+        raise ValueError("Bar plot only supports absolute values.")
     if not metric_col:
         raise ValueError("Metric column is required for bar plot.")
     sentinels = _resolve_sentinels(state, sentinels)
@@ -870,11 +1026,22 @@ def prepare_timeseries_plot(
     outlier_method = _resolve_outlier_method(state, outlier_method)
 
     data = TimeSeriesPlotData(
-        mode_label="absolute" if value_mode == "absolute" else "% of mean",
+        mode_label=_value_mode_label(value_mode),
         metric_label=metric_col,
         compare=compare,
     )
     order = ordered_source_ids(state)
+    visible_ids = [sid for sid in order if state.show_flag.get(sid, True)]
+    target_mean = _resolve_timeseries_target_mean(
+        state,
+        baseline_ids if compare else visible_ids,
+        metric_col=metric_col,
+        agg_mode=agg_mode,
+        value_mode=value_mode,
+        sentinels=sentinels,
+        outlier_threshold=outlier_threshold,
+        outlier_method=outlier_method,
+    )
 
     x_label = "Time (s)"
     if agg_mode == "pedal_stroke":
@@ -910,16 +1077,20 @@ def prepare_timeseries_plot(
                 t, vals = _series_pedal_stroke(
                     state.loaded[sid], metric_col, sentinels, outlier_threshold, outlier_method
                 )
-                val2 = _apply_value_mode(vals, value_mode)
+                val2 = _apply_value_mode(vals, value_mode, target_mean=target_mean)
             elif agg_mode == "roll_360deg":
                 t, vals = _series_roll_360(
                     state.loaded[sid], metric_col, sentinels, outlier_threshold, outlier_method
                 )
-                val2 = _apply_value_mode(vals, value_mode)
+                val2 = _apply_value_mode(vals, value_mode, target_mean=target_mean)
             else:
                 vals = sanitize_numeric(state.loaded[sid][metric_col], sentinels)
                 vals = apply_outlier_filter(vals, threshold=outlier_threshold, method=outlier_method)
-                val2 = _apply_value_mode(vals.to_numpy(dtype=float), value_mode)
+                val2 = _apply_value_mode(
+                    vals.to_numpy(dtype=float),
+                    value_mode,
+                    target_mean=target_mean,
+                )
                 t = np.arange(len(val2), dtype=float) / 100.0
 
             if compare:

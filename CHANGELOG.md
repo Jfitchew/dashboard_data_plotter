@@ -1,6 +1,8 @@
 # Change Log
 
 3.29 - New Build Release
+  - 3.46.2 - 2026-03-13 - Added a `Mean-matched` radar/cartesian/time-series value mode that scales each dataset to a common mean level, shortened the value-mode labels to `Absolute values` / `% of mean`, and kept bar plots restricted to absolute values.
+  - 3.46.1 - 2026-03-13 - Fixed the VS Code workspace Python interpreter setting to use a direct relative `.venv\Scripts\python.exe` path, avoiding the unresolved `${workspaceFolder}` warning on first open.
   - 3.45.1 - 2026-02-26 - Kept the Tk left-panel status/info message to a single line (preventing it from expanding over controls) and added a hover tooltip on the status line to show the full message text.
   - 3.44.4 - 2026-02-26 - Added an `Original Dashboard Bins` pre-plot integrity warning in the Tk UI (checks imported `left_pedalstroke_avg` row count, required angle/metric columns, and missing/invalid bin values) and clarified via tooltip that radar/cartesian comparison mode aligns other datasets to the baseline by bin index while using baseline bin angles.
   - 3.44.3 - 2026-02-26 - Changed `Original Dashboard Bins` radar/cartesian plotting to use each `left_pedalstroke_avg` row's own averaged crank angle directly (no 52-bin re-aggregation), and in comparison mode align datasets to the baseline by bin index while plotting deltas at the baseline dataset's bin angles.

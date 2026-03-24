@@ -587,6 +587,8 @@ def _build_plot_result(
         errors = list(data.errors)
         if value_mode == "percent_mean":
             note = "% of mean uses dataset-specific normalization."
+        elif value_mode == "mean_matched":
+            note = "Mean-matched scales each dataset to a common mean level."
     elif plot_type == "Cartesian":
         data = prepare_cartesian_plot(
             state,
@@ -614,6 +616,8 @@ def _build_plot_result(
         errors = list(data.errors)
         if value_mode == "percent_mean":
             note = "% of mean uses dataset-specific normalization."
+        elif value_mode == "mean_matched":
+            note = "Mean-matched scales each dataset to a common mean level."
     elif plot_type == "Bar":
         data = prepare_bar_plot(
             state,
@@ -660,6 +664,8 @@ def _build_plot_result(
         errors = list(data.errors)
         if value_mode == "percent_mean":
             note = "% of mean uses dataset-specific normalization."
+        elif value_mode == "mean_matched":
+            note = "Mean-matched scales each dataset to a common mean level."
 
     _figure_theme_layout(fig)
     return fig.to_dict(), errors, note
@@ -1108,7 +1114,11 @@ def _plot_groups(session_data: dict[str, Any] | None) -> list[html.Div]:
                         html.Div("Mode", className="ddp-subtitle"),
                         dcc.RadioItems(
                             id="plot-value-mode",
-                            options=[{"label": "Absolute", "value": "absolute"}, {"label": "% of dataset mean", "value": "percent_mean"}],
+                            options=[
+                                {"label": "Absolute values", "value": "absolute"},
+                                {"label": "% of mean", "value": "percent_mean"},
+                                {"label": "Mean-matched", "value": "mean_matched"},
+                            ],
                             value=ui.get("value_mode", "absolute") if allow_value_mode else "absolute",
                             className="ddp-radio-inline",
                             inputClassName="ddp-radio-input",

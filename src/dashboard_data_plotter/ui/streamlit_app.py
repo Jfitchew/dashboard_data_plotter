@@ -673,17 +673,21 @@ def _render_plot_controls(*, plot_output=None) -> None:
     st.markdown('<p class="ddp-panel-title">Mode</p>', unsafe_allow_html=True)
     value_mode = "absolute"
     if allow_value_mode:
-        if st.session_state.value_mode not in ("absolute", "percent_mean"):
+        if st.session_state.value_mode not in ("absolute", "percent_mean", "mean_matched"):
             st.session_state.value_mode = "absolute"
         value_mode = st.radio(
             "Value mode",
-            ["absolute", "percent_mean"],
-            format_func=lambda v: "Absolute" if v == "absolute" else "% of dataset mean",
+            ["absolute", "percent_mean", "mean_matched"],
+            format_func=lambda v: {
+                "absolute": "Absolute values",
+                "percent_mean": "% of mean",
+                "mean_matched": "Mean-matched",
+            }.get(v, v),
             horizontal=True,
             key="value_mode",
         )
     else:
-        st.caption("Bar plot uses absolute values only (percent of mean is disabled).")
+        st.caption("Bar plot uses absolute values only.")
 
     compare = st.checkbox("Compare vs baseline", key="compare")
     baseline_id = None
@@ -910,6 +914,8 @@ def _render_plot_controls(*, plot_output=None) -> None:
 
             if plot_type != "Bar" and value_mode == "percent_mean":
                 plot_host.caption("% of mean uses dataset-specific normalization.")
+            elif plot_type != "Bar" and value_mode == "mean_matched":
+                plot_host.caption("Mean-matched scales each dataset to a common mean level.")
 
             if data.errors:
                 plot_host.warning("Some datasets failed to plot:")

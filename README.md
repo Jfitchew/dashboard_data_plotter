@@ -73,16 +73,18 @@ but the app is tolerant of missing or sparse data.
 - Optional background image support for radar plots (see below)
 - When Fixed range is off, the radar radial axis auto-ranges to keep the outer bound at the plotted maximum and set the inner bound to `minimum - 20% * (maximum - minimum)`
 - Supports:
-  - Absolute metric values
-  - % of dataset mean (falls back to full data-span scaling when the mean is near zero)
+  - Absolute values
+  - % of mean (falls back to full data-span scaling when the mean is near zero)
+  - Mean-matched scaling (scales each dataset to a common mean level while preserving curve shape)
   - Comparison vs baseline (difference ring)
 
 ### Cartesian (0–360°) plot
 - Metric value vs crank angle on Cartesian axes
 - Uses the same 52-bin angular aggregation as radar plots
 - Supports:
-  - Absolute metric values
-  - % of dataset mean (falls back to full data-span scaling when the mean is near zero)
+  - Absolute values
+  - % of mean (falls back to full data-span scaling when the mean is near zero)
+  - Mean-matched scaling (scales each dataset to a common mean level while preserving curve shape)
   - Comparison vs baseline (signed delta on y, with a zero reference line)
 
 ### Bar plot
@@ -95,7 +97,7 @@ but the app is tolerant of missing or sparse data.
   - In comparison mode, positive labels are shown above bars and negative labels at the base near zero
 - X-axis label spacing adapts to long dataset names, with smaller tick font for names longer than 15 characters
 - Explicitly **does not use crank angle**
-- “% of dataset mean” is intentionally disabled for bar plots
+- Non-absolute value modes are intentionally disabled for bar plots
 
 ---
 

@@ -53,6 +53,7 @@ from dashboard_data_plotter.data.loaders import (
     DEFAULT_SENTINELS,
     extract_named_datasets,
     extract_named_binned_datasets,
+    load_csv_file_datasets,
     load_json_file_obj,
     make_unique_name,
     parse_sentinels,
@@ -5558,6 +5559,8 @@ class DashboardDataPlotter(tk.Tk):
         paths = filedialog.askopenfilenames(
             title="Select data file(s)",
             filetypes=[
+                ("Data files", ("*.json", "*.txt", "*.csv")),
+                ("CSV", ("*.csv",)),
                 ("JSON / TXT", ("*.json", "*.txt")),
                 ("JSON", ("*.json",)),
                 ("Text", ("*.txt",)),
@@ -5570,12 +5573,23 @@ class DashboardDataPlotter(tk.Tk):
         added = 0
         for p in paths:
             try:
+                base = os.path.splitext(os.path.basename(p))[0]
+                if os.path.splitext(p)[1].lower() == ".csv":
+                    datasets = load_csv_file_datasets(p)
+                    for _name, df in datasets:
+                        source_id = p
+                        if source_id in self.state.loaded:
+                            continue
+                        self._register_dataset(
+                            source_id=source_id, display=base, df=df)
+                        added += 1
+                    continue
+
                 obj = load_json_file_obj(p)
                 datasets = self._datasets_from_json_obj(obj)
                 binned_by_name = self._binned_from_json_obj(obj)
                 if not datasets:
                     raise ValueError("No valid datasets found in JSON file.")
-                base = os.path.splitext(os.path.basename(p))[0]
                 for name, df, _source_id, display_override in datasets:
                     display = display_override or (
                         base if name == "Dataset" else str(name))
@@ -5589,7 +5603,7 @@ class DashboardDataPlotter(tk.Tk):
                         self.state.binned[source_id] = binned_df
                     added += 1
             except Exception as e:
-                log_exception("load data from JSON failed")
+                log_exception("load data file failed")
                 messagebox.showerror(
                     "Load failed", f"{type(e).__name__}: {e}\n\nLog: {DEFAULT_LOG_PATH}")
 

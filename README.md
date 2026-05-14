@@ -25,7 +25,7 @@ interaction to progressively automate analysis and generate high-quality reports
 
 ### Data loading
 - Start with an **untitled project** or load a saved project JSON
-- Add **one or more data files** (JSON/TXT today; CSV planned)
+- Add **one or more data files** (`.json`, `.txt`, or single-dataset `.csv`)
 - Load **multi‑dataset JSON objects** (file‑based or pasted)
 - Paste JSON objects directly into the UI
 - Project title is stored in the project JSON and used as the default save filename

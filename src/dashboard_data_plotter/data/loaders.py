@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 DEFAULT_SENTINELS = "9999"  # invalid values used in dataset
+CSV_ENCODINGS = ("utf-8-sig", "utf-8", "cp1252", "latin-1")
 
 
 def load_json_file_obj(path: str) -> Any:
@@ -118,6 +119,42 @@ def load_json_file_datasets(path: str) -> List[Tuple[str, pd.DataFrame]]:
     if not out:
         raise ValueError("No valid datasets found in JSON file.")
     return out
+
+
+def load_csv_file_datasets(path: str) -> List[Tuple[str, pd.DataFrame]]:
+    """Load a CSV file as a single dataset, coercing all columns to numeric."""
+    last_error: Exception | None = None
+    df: pd.DataFrame | None = None
+    for encoding in CSV_ENCODINGS:
+        try:
+            df = pd.read_csv(path, sep=None, engine="python", encoding=encoding)
+            break
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            continue
+        except pd.errors.EmptyDataError as exc:
+            raise ValueError("CSV file is empty.") from exc
+        except Exception as exc:
+            last_error = exc
+            continue
+
+    if df is None:
+        if last_error is not None:
+            raise ValueError(f"Could not read CSV file: {last_error}") from last_error
+        raise ValueError("Could not read CSV file.")
+
+    if not list(df.columns):
+        raise ValueError("CSV file has no columns.")
+
+    df.columns = [
+        str(col).strip() if str(col).strip() else f"Column {idx + 1}"
+        for idx, col in enumerate(df.columns)
+    ]
+    for c in df.columns:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    dataset_name = os.path.splitext(os.path.basename(path))[0] or "Dataset"
+    return [(dataset_name, df)]
 
 
 def df_to_jsonable_records(df: pd.DataFrame) -> List[Dict[str, Any]]:

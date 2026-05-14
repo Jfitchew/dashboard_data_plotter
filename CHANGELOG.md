@@ -1,6 +1,7 @@
 # Change Log
 
 3.29 - New Build Release
+  - 3.47.1 - 2026-03-27 - Extended the Tk `Add Data Files` workflow to accept `.csv` files alongside JSON/TXT, loading each CSV as a single dataset named from the filename with tolerant delimiter/encoding detection and the existing dataset order/identity rules.
   - 3.46.2 - 2026-03-13 - Added a `Mean-matched` radar/cartesian/time-series value mode that scales each dataset to a common mean level, shortened the value-mode labels to `Absolute values` / `% of mean`, and kept bar plots restricted to absolute values.
   - 3.46.1 - 2026-03-13 - Fixed the VS Code workspace Python interpreter setting to use a direct relative `.venv\Scripts\python.exe` path, avoiding the unresolved `${workspaceFolder}` warning on first open.
   - 3.45.1 - 2026-02-26 - Kept the Tk left-panel status/info message to a single line (preventing it from expanding over controls) and added a hover tooltip on the status line to show the full message text.

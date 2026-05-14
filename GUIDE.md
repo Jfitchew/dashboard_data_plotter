@@ -25,7 +25,7 @@ Key points:
 ## Datasets
 
 You can add datasets in three ways:
-- **Add data file(s)...** from JSON/TXT.
+- **Add data file(s)...** from JSON/TXT/CSV.
 - **Paste data source** (JSON) and click **Load pasted data**.
 - **Load project** (brings datasets back).
 
